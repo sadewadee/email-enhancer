@@ -1,0 +1,317 @@
+diff --git a/web_scraper.py b/web_scraper.py
+index ea7d7045..4eb406b2 100644
+--- a/web_scraper.py
++++ b/web_scraper.py
+@@ -11,6 +11,8 @@ from scrapling.fetchers import StealthyFetcher
+ from bs4 import BeautifulSoup
+ from urllib.parse import urljoin, urlparse, parse_qs
+ import json
++from urllib.request import Request, urlopen
++from urllib.error import URLError, HTTPError
+ 
+ 
+ class WebScraper:
+@@ -20,7 +22,10 @@ class WebScraper:
+                  headless: bool = True,
+                  solve_cloudflare: bool = True,
+                  timeout: int = 30,
+-                 network_idle: bool = True):
++                 network_idle: bool = True,
++                 block_images: bool = False,
++                 disable_resources: bool = False,
++                 static_first: bool = True):
+         """
+         Initialize the web scraper.
+ 
+@@ -29,11 +34,16 @@ class WebScraper:
+             solve_cloudflare (bool): Enable Cloudflare bypass
+             timeout (int): Timeout in seconds
+             network_idle (bool): Wait for network idle state
++            block_images (bool): Prevent image loading to save bandwidth
++            disable_resources (bool): Drop non-essential resources (fonts, media, etc.)
+         """
+         self.headless = headless
+         self.solve_cloudflare = solve_cloudflare
+         self.timeout = timeout
+         self.network_idle = network_idle
++        self.block_images = block_images
++        self.disable_resources = disable_resources
++        self.static_first = static_first
+ 
+         # Suppress harmless Cloudflare messages from Scrapling
+         class _CloudflareLogFilter(logging.Filter):
+@@ -46,6 +56,208 @@ class WebScraper:
+             lg = logging.getLogger(name)
+             lg.addFilter(_CloudflareLogFilter())
+ 
++    def _build_allowlist_page_action(self):
++        """Build a Playwright page_action that installs allowlist routing for Cloudflare-critical resources while blocking heavy assets."""
++        try:
++            from urllib.parse import urlparse
++            # Playwright sync Page API expected
++            def _handler(route, request):
++                try:
++                    url = (request.url or "").lower()
++                    host = (urlparse(request.url or "").netloc or "").lower()
++                    rt = (getattr(request, "resource_type", None) or "").lower()
++
++                    # Expanded allowlist to robustly support Cloudflare and captcha subresources
++                    allowed_types = {
++                        "script", "worker", "xhr", "fetch", "document", "stylesheet",
++                        "websocket", "eventsource", "texttrack"
++                    }
++                    allowed_hosts = (
++                        # Cloudflare
++                        "challenges.cloudflare.com",
++                        "challenge.cloudflare.com",
++                        "captcha.cloudflare.com",
++                        "ajax.cloudflare.com",
++                        "cloudflare.com",
++                        "cloudflareinsights.com",
++                        "static.cloudflareinsights.com",
++                        "assets.cloudflare.com",
++                        # Google CDN and APIs (reCAPTCHA and related)
++                        "gstatic.com",
++                        "www.gstatic.com",
++                        "googleapis.com",
++                        "www.google.com",
++                        # reCAPTCHA endpoints
++                        "recaptcha.net",
++                        "www.recaptcha.net",
++                        # hCaptcha endpoints
++                        "hcaptcha.com",
++                        "newassets.hcaptcha.com",
++                        "assets.hcaptcha.com",
++                        "js.hcaptcha.com",
++                        "hcaptcha.net",
++                        # Arkose Labs (some CF-protected sites use Arkose)
++                        "client-api.arkoselabs.com",
++                        "api.arkoselabs.com",
++                        "arkoselabs.com",
++                        # Common CDN used by many sites
++                        "cdnjs.cloudflare.com"
++                    )
++                    allowed_substrings = (
++                        "/cdn-cgi/",
++                        "turnstile",
++                        "turnstile/v0",
++                        "/cf-turnstile/",
++                        "challenge-platform",
++                        "cf-challenge",
++                        "interstitial",
++                        "/recaptcha/",
++                        "/captcha/",
++                        "/cf-chl/",
++                        "cf-chl-js"
++                    )
++
++                    def _host_allowed(h: str) -> bool:
++                        return any(h.endswith(sfx) for sfx in allowed_hosts)
++
++                    def _url_allowed(u: str) -> bool:
++                        return any(sub in u for sub in allowed_substrings)
++
++                    # Allow Cloudflare-critical and script-related resources
++                    if rt in allowed_types or _host_allowed(host) or _url_allowed(url):
++                        return route.continue_()
++
++                    # Block heavy assets unless explicitly allowed
++                    if rt in {"image", "media", "font"}:
++                        return route.abort()
++
++                    # In light-load mode, be strict: block by default to preserve bandwidth for CF challenge
++                    # This prevents resource contention that causes "Waiting for Cloudflare" delays
++                    if self.block_images or self.disable_resources:
++                        return route.abort()
++
++                    # Fallback: allow other resources (when not in light-load mode)
++                    return route.continue_()
++                except Exception:
++                    try:
++                        route.continue_()
++                    except Exception:
++                        pass
++
++            def _page_action(page):
++                try:
++                    page.route("**/*", _handler)
++                except Exception:
++                    # Fallback: ignore routing failures
++                    pass
++                # Best-effort waits to let CF challenge complete without blocking
++                try:
++                    # Wait for initial DOM; CF challenge often attaches early
++                    page.wait_for_load_state("domcontentloaded", timeout=30000)
++                except Exception:
++                    pass
++                try:
++                    # If Turnstile/hCaptcha iframe appears, give it time to resolve
++                    # Do not hard fail; just soft-wait
++                    if page.query_selector('iframe[src*="turnstile"]') or page.query_selector('iframe[src*="hcaptcha"]'):
++                        page.wait_for_timeout(2000)
++                except Exception:
++                    pass
++                try:
++                    # Poll for cf_clearance cookie (Cloudflare clearance) up to ~6s
++                    for _ in range(6):
++                        try:
++                            cookies = page.context.cookies()
++                        except Exception:
++                            cookies = []
++                        if any((c.get('name') or '').lower() == 'cf_clearance' for c in cookies):
++                            break
++                        page.wait_for_timeout(1000)
++                except Exception:
++                    pass
++
++            return _page_action
++        except Exception:
++            # If anything goes wrong, return a no-op
++            return lambda page: None
++
++    def _looks_like_challenge(self, html: str, url: str) -> bool:
++        """Heuristic to detect bot challenges/captcha in static HTML."""
++        if not html:
++            return True
++        low = html.lower()
++        indicators = (
++            'cf-challenge', 'cloudflare', 'data-cf', 'turnstile', 'captcha',
++            'recaptcha', 'hcaptcha', 'just a moment', 'verify you are human'
++        )
++        # Avoid false positives for legitimate content mentioning these words rarely
++        return any(k in low for k in indicators)
++
++    def _try_static_fetch(self, url: str) -> Optional[Dict]:
++        """
++        Perform a fast static HTTP GET and return a scrape-like result if suitable.
++
++        Returns None if content is not HTML, looks like a challenge, or errors occur.
++        """
++        start_time = time.time()
++        try:
++            ua = (
++                'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) '
++                'AppleWebKit/537.36 (KHTML, like Gecko) '
++                'Chrome/120.0 Safari/537.36'
++            )
++            req = Request(
++                url,
++                headers={
++                    'User-Agent': ua,
++                    'Accept': 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.8',
++                    'Accept-Language': 'en-US,en;q=0.9,id;q=0.8'
++                }
++            )
++            resp = urlopen(req, timeout=min(self.timeout, 12))
++            content_type = (resp.headers.get('Content-Type') or '').lower()
++            if ('text/html' not in content_type) and ('application/xhtml+xml' not in content_type):
++                return None
++            raw = resp.read()
++            try:
++                html = raw.decode('utf-8', errors='replace')
++            except Exception:
++                html = raw.decode('latin-1', errors='replace')
++            final_url = getattr(resp, 'geturl', lambda: url)()
++
++            # Heuristic: skip if content looks like a challenge or is too short
++            if self._looks_like_challenge(html, final_url) or len(html) < 400:
++                return None
++
++            result = {
++                'status': getattr(resp, 'status', 200) or 200,
++                'html': html,
++                'url': url,
++                'final_url': final_url,
++                'error': None,
++                'load_time': time.time() - start_time,
++                'page_title': '',
++                'meta_description': '',
++                'is_contact_page': False
++            }
++
++            if html:
++                soup = BeautifulSoup(html, 'html.parser')
++                title_tag = soup.find('title')
++                if title_tag:
++                    result['page_title'] = title_tag.get_text().strip()
++                meta_desc = soup.find('meta', attrs={'name': 'description'})
++                if meta_desc:
++                    result['meta_description'] = meta_desc.get('content', '').strip()
++                result['is_contact_page'] = self.is_contact_page(html, final_url)
++
++            return result
++        except (HTTPError, URLError) as e:
++            # Network or HTTP error on static path -> defer to dynamic
++            return None
++        except Exception:
++            return None
++
+     def scrape_url(self, url: str) -> Dict:
+         """
+         Fetch webpage content with anti-bot bypass and JavaScript rendering.
+@@ -72,14 +284,34 @@ class WebScraper:
+         start_time = time.time()
+ 
+         try:
+-            # Fetch page using StealthyFetcher
++            # 1) Static-first: attempt lightweight HTML fetch, then fall back
++            if self.static_first:
++                static_result = self._try_static_fetch(url)
++                if static_result is not None:
++                    return static_result
++
++            # 2) Fall back to StealthyFetcher with rendering/anti-bot bypass
++            # Ensure generous timeout for Cloudflare challenges
++            eff_timeout = max(self.timeout, 60) if self.solve_cloudflare else self.timeout
+             page = StealthyFetcher.fetch(
+                 url,
+                 headless=self.headless,
+                 solve_cloudflare=self.solve_cloudflare,
+-                network_idle=self.network_idle,
+-                google_search=False,
+-                timeout=self.timeout
++                network_idle=False if self.solve_cloudflare else self.network_idle,
++                # Help solver by simulating Google-referrer style traffic
++                google_search=True,
++                # Strengthen human-like behavior and environment realism
++                humanize=True,
++                geoip=True,
++                os_randomize=True,
++                allow_webgl=True,
++                block_webrtc=True,
++                timeout=eff_timeout,
++                block_images=self.block_images,
++                # Respect light-load configuration; rely on router allowlist instead
++                disable_resources=self.disable_resources,
++                # Install router when in any light-load mode (images or prior resource control requested)
++                page_action=self._build_allowlist_page_action() if (self.block_images or self.disable_resources) else None
+             )
+ 
+             result['status'] = page.status
+@@ -91,17 +323,14 @@ class WebScraper:
+             if page.html_content:
+                 soup = BeautifulSoup(page.html_content, 'html.parser')
+ 
+-                # Get page title
+                 title_tag = soup.find('title')
+                 if title_tag:
+                     result['page_title'] = title_tag.get_text().strip()
+ 
+-                # Get meta description
+                 meta_desc = soup.find('meta', attrs={'name': 'description'})
+                 if meta_desc:
+                     result['meta_description'] = meta_desc.get('content', '').strip()
+ 
+-                # Check if this is a contact page
+                 result['is_contact_page'] = self.is_contact_page(page.html_content, page.url)
+ 
+         except Exception as e:
+@@ -281,7 +510,7 @@ class WebScraper:
+                 cleaned_emails = []
+                 for em in result['emails']:
+                     norm = extractor._normalize_email(em)
+-                    if norm:
++                    if norm and not extractor._is_placeholder_email(norm):
+                         cleaned_emails.append(norm)
+                 # Preserve order while deduplicating
+                 result['emails'] = list(dict.fromkeys(cleaned_emails))

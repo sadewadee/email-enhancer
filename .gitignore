@@ -1,0 +1,70 @@
+# macOS
+.DS_Store
+
+# Python cache/artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+*.egg
+
+# Virtual environments and env files
+venv/
+.venv/
+.env
+
+# IDE/tooling
+.vscode/
+.claude/
+
+# Logs
+logs/
+*.log
+
+# Build/output/cache
+dist/
+build/
+.cache/
+venv/
+data/
+datas/
+new_data/
+country/*
+countryX/
+
+# Test/coverage caches
+.pytest_cache/
+coverage.xml
+htmlcov/
+test*
+
+
+# Node/Playwright (if present)
+node_modules/
+playwright-report/
+test-results/
+
+# Generated data/results
+results/
+datas/
+*_processed.csv
+*_wide_form.csv
+
+# Temporary files
+tmp*/
+*.tmp
+*.md
+!readme.md
+*.txt
+
+# Local helper artifacts
+skipped.txt
+sampler.txt
+
+#Others
+datas/
+country/
+logs/
+results/

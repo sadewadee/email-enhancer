@@ -1,0 +1,23 @@
+# Proxy Configuration File
+# This file contains proxy servers that will be automatically used by the scraper
+# 
+# Supported formats:
+# 1. host:port
+# 2. protocol://host:port  
+# 3. protocol://username:password@host:port
+# 4. host:port:username:password
+#
+# Examples:
+# 127.0.0.1:8080
+# http://proxy.example.com:3128
+# http://user:pass@proxy.example.com:8080
+# 192.168.1.100:3128:myuser:mypass
+#
+# Lines starting with # are ignored
+# Empty lines are ignored
+
+# Add your proxy servers below (remove the # to enable):
+# 127.0.0.1:8080
+# http://proxy.example.com:3128
+# socks5://proxy.example.com:1080
+# http://username:password@proxy.example.com:8080
