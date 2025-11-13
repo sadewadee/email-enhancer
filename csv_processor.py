@@ -19,6 +19,7 @@ import queue
 from web_scraper import WebScraper
 from contact_extractor import ContactExtractor
 from email_validation import EmailValidator
+from whatsapp_validator import WhatsAppValidator
 
 
 
@@ -151,6 +152,7 @@ class CSVProcessor:
             third_party_provider="rapid",
             sender_email="verify@example.com"
         )
+        self.whatsapp_validator = WhatsAppValidator()
         # Logging levels are now controlled by main.py setup
         # email_validation, web_scraper, and csv_processor will log DEBUG to file
         # only INFO+ will appear in console
@@ -249,46 +251,56 @@ class CSVProcessor:
     def process_csv_file(self,
                         input_file: str,
                         output_file: str,
-                        url_column: str = 'url',
                         batch_size: int = 100,
                         input_chunksize: int = 0,
-                        select_columns: Optional[List[str]] = None,
                         limit_rows: Optional[int] = None) -> Dict[str, Any]:
         """
         Process a CSV file with URLs in parallel.
+        Auto-detects URL column and selects only useful columns.
 
         Args:
             input_file: Path to input CSV file
             output_file: Path to output CSV file
-            url_column: Name of the column containing URLs
             batch_size: Number of URLs to process in each batch
             input_chunksize: Number of rows to read per chunk (0 = read all at once)
-            select_columns: Optional list of columns to load from CSV (saves memory for large files)
             limit_rows: Optional limit on number of rows to process (for testing)
 
         Returns:
             Dictionary with processing statistics
         """
+        # Auto-detect url_column, will be set in the try block below
+        url_column = 'url'  # default fallback
         try:
             # Read header only to validate columns without loading full data
             columns_df = pd.read_csv(input_file, nrows=0)
-            if url_column not in columns_df.columns:
-                raise ValueError(f"Column '{url_column}' not found in CSV file")
 
-            # Validate select_columns if provided
-            if select_columns:
-                # Ensure url_column is always included
-                if url_column not in select_columns:
-                    select_columns = list(select_columns) + [url_column]
+            # AUTO-DETECT URL column: look for 'url', 'website', 'link', etc.
+            detected_url_column = None
+            for possible_name in ['url', 'website', 'link', 'site', 'domain']:
+                if possible_name in columns_df.columns:
+                    detected_url_column = possible_name
+                    break
 
-                # Validate all selected columns exist
-                missing_cols = [col for col in select_columns if col not in columns_df.columns]
-                if missing_cols:
-                    raise ValueError(f"Selected columns not found in CSV: {missing_cols}")
+            if detected_url_column:
+                url_column = detected_url_column
+                self.logger.debug(f"🔍 Auto-detected URL column: '{url_column}'")
+            elif url_column not in columns_df.columns:
+                raise ValueError(f"No URL column found. Expected one of: url, website, link")
 
-                self.logger.info(f"📋 Loading only {len(select_columns)} columns: {select_columns}")
-            else:
-                select_columns = None  # Load all columns
+            # AUTO-SELECT only useful columns (ignore all the bloat)
+            useful_columns = ['title', 'name', 'category', 'address', 'phone', 'emails',
+                            'facebook', 'instagram', 'linkedin', 'twitter', 'whatsapp']
+
+            # Select columns that exist in the CSV
+            select_columns = [url_column]  # Always include URL column
+            for col in columns_df.columns:
+                col_lower = col.lower()
+                # Include if column name matches useful columns (case-insensitive)
+                if any(useful in col_lower for useful in useful_columns):
+                    if col not in select_columns:
+                        select_columns.append(col)
+
+            self.logger.debug(f"📋 Auto-selected {len(select_columns)} columns from {len(columns_df.columns)} total: {select_columns}")
 
             # Determine total rows with non-empty URL for progress bar
             total_urls = 0
@@ -303,8 +315,8 @@ class CSVProcessor:
                         break
 
             if limit_rows:
-                self.logger.info(f"🔬 Testing mode: Processing limited to {total_urls} URLs (--limit {limit_rows})")
-            self.logger.info(f"📊 Processing {total_urls} URLs with {self.max_workers} workers")
+                self.logger.debug(f"🔬 Testing mode: Processing limited to {total_urls} URLs (--limit {limit_rows})")
+            self.logger.debug(f"📊 Processing {total_urls} URLs with {self.max_workers} workers")
 
             # Prepare streaming CSV writer
             os.makedirs(os.path.dirname(output_file) or '.', exist_ok=True)
@@ -315,10 +327,10 @@ class CSVProcessor:
                 original_cols = [c for c in select_columns if c != 'email']
             else:
                 original_cols = [c for c in columns_df.columns if c != 'email']
-            contact_cols = ['emails', 'phones', 'whatsapp', 'validated_emails']
+            contact_cols = ['emails', 'phones', 'whatsapp', 'validated_emails', 'validated_whatsapp']
             metrics_cols = [
                 'scraping_status', 'scraping_error', 'processing_time', 'pages_scraped',
-                'emails_found', 'phones_found', 'whatsapp_found', 'validated_emails_count'
+                'emails_found', 'phones_found', 'whatsapp_found', 'validated_emails_count', 'validated_whatsapp_count'
             ]
             # Add 'No.' as first column for row numbering
             header = ['No.'] + original_cols + contact_cols + metrics_cols
@@ -383,16 +395,32 @@ class CSVProcessor:
                                 validated_emails = {}
                         result['validated_emails'] = validated_emails
 
+                        # WhatsApp validation
+                        validated_whatsapp = {}
+                        whatsapp_list = result.get('whatsapp', []) or []
+                        if whatsapp_list:
+                            self.logger.debug(f"Validating {len(whatsapp_list)} WhatsApp numbers from {url}: {whatsapp_list}")
+                            try:
+                                validated_whatsapp = self.whatsapp_validator.validate_batch(whatsapp_list)
+                                # Log validation results for each WhatsApp number
+                                for number, validation in validated_whatsapp.items():
+                                    self.logger.debug(f"WhatsApp validation: {number} | valid: {validation.get('valid')} | reason: {validation.get('reason')} | type: {validation.get('type')} | country: {validation.get('country')}")
+                            except Exception as e:
+                                self.logger.debug(f"WhatsApp validation failed for {url}: {str(e)}")
+                                validated_whatsapp = {}
+                        result['validated_whatsapp'] = validated_whatsapp
+
                         # Update stats
                         emails_count = len(emails_list)
                         phones_count = len(result.get('phones', []) or [])
-                        whatsapp_count = len(result.get('whatsapp', []) or [])
-                        validated_count = len(validated_emails)
+                        whatsapp_count = len(whatsapp_list)
+                        validated_emails_count = len(validated_emails)
+                        validated_whatsapp_count = len(validated_whatsapp)
 
                         total_emails += emails_count
                         total_phones += phones_count
                         total_whatsapp += whatsapp_count
-                        total_validated_emails += validated_count
+                        total_validated_emails += validated_emails_count
                         total_processing_time += float(result.get('processing_time', 0) or 0)
 
                         # Prepare CSV row
@@ -410,13 +438,18 @@ class CSVProcessor:
                             'emails_found': emails_count,
                             'phones_found': phones_count,
                             'whatsapp_found': whatsapp_count,
-                            'validated_emails_count': validated_count,
+                            'validated_emails_count': validated_emails_count,
+                            'validated_whatsapp_count': validated_whatsapp_count,
                             'emails': '; '.join(emails_list),
                             'phones': '; '.join(result.get('phones', []) or []),
-                            'whatsapp': '; '.join(result.get('whatsapp', []) or []),
+                            'whatsapp': '; '.join(whatsapp_list),
                             'validated_emails': '; '.join([
                                 f"{email} (reason:{validation_result.get('reason', 'unknown')}, conf:{validation_result.get('confidence', 'unknown')}, big:{validation_result.get('is_big_provider', False)})"
                                 for email, validation_result in validated_emails.items()
+                            ]),
+                            'validated_whatsapp': '; '.join([
+                                f"{number} (valid:{validation_result.get('valid', False)}, type:{validation_result.get('type', 'unknown')}, country:{validation_result.get('country', 'unknown')}, reason:{validation_result.get('reason', 'unknown')})"
+                                for number, validation_result in validated_whatsapp.items()
                             ])
                         }
 

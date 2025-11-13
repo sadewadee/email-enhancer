@@ -180,17 +180,14 @@ class EmailScraperValidator:
     def process_single_csv(self,
                            input_file: str,
                            output_dir: Optional[str] = None,
-                           url_column: str = 'url',
-                           select_columns: Optional[List[str]] = None,
                            limit_rows: Optional[int] = None) -> Dict[str, Any]:
         """
         Process a single CSV file.
+        Auto-detects URL column and useful columns.
 
         Args:
             input_file: Path to input CSV file
             output_dir: Output directory (default: same as input)
-            url_column: Name of column containing URLs
-            select_columns: Optional list of columns to load (saves memory for large files)
             limit_rows: Optional limit on number of rows to process (for testing)
 
         Returns:
@@ -207,16 +204,16 @@ class EmailScraperValidator:
             base_name = os.path.splitext(os.path.basename(input_file))[0]
             processed_file = os.path.join(output_dir, f"{base_name}_processed.csv")
 
-            self.logger.info(f"📂 Processing file: {os.path.basename(input_file)}")
+            # Log with limit info if specified
+            limit_info = f" (limit: {limit_rows})" if limit_rows else ""
+            self.logger.info(f"📂 Processing file: {os.path.basename(input_file)}{limit_info}")
 
             # Step 1: Process CSV with contact extraction
             processing_stats = self.csv_processor.process_csv_file(
                 input_file=input_file,
                 output_file=processed_file,
-                url_column=url_column,
                 batch_size=self.config['batch_size'],
                 input_chunksize=self.config.get('chunk_size', 0),
-                select_columns=select_columns,
                 limit_rows=limit_rows
             )
 
@@ -249,9 +246,7 @@ class EmailScraperValidator:
     def process_multiple_csv(self,
                            input_files: List[str],
                            output_dir: str,
-                           url_column: str = 'url',
                            merge_results: bool = True,
-                           select_columns: Optional[List[str]] = None,
                            limit_rows: Optional[int] = None) -> Dict[str, Any]:
         """
         Process multiple CSV files.
@@ -275,7 +270,7 @@ class EmailScraperValidator:
             processed_files = []
 
             for input_file in input_files:
-                result = self.process_single_csv(input_file, output_dir, url_column, select_columns, limit_rows)
+                result = self.process_single_csv(input_file, output_dir, limit_rows)
                 individual_results.append(result)
 
                 if result['status'] == 'completed':
@@ -572,16 +567,12 @@ Examples:
     single_parser = subparsers.add_parser('single', help='Process single CSV file')
     single_parser.add_argument('input_file', help='Input CSV file path')
     single_parser.add_argument('--output-dir', help='Output directory (default: same as input)')
-    single_parser.add_argument('--url-column', default='url', help='Name of URL column (default: url)')
-    single_parser.add_argument('--select-columns', nargs='+', metavar='COLUMN', help='Select specific columns to load (saves memory for large CSV files). Example: --select-columns title category website phone emails')
     single_parser.add_argument('--limit', type=int, metavar='N', help='Limit processing to first N rows (for testing). Example: --limit 10')
 
     # Batch CSV processing
     batch_parser = subparsers.add_parser('batch', help='Process multiple CSV files')
     batch_parser.add_argument('input_files', nargs='+', help='Input CSV file paths')
     batch_parser.add_argument('--output-dir', required=True, help='Output directory')
-    batch_parser.add_argument('--url-column', default='url', help='Name of URL column (default: url)')
-    batch_parser.add_argument('--select-columns', nargs='+', metavar='COLUMN', help='Select specific columns to load (saves memory for large CSV files). Example: --select-columns title category website phone emails')
     batch_parser.add_argument('--limit', type=int, metavar='N', help='Limit processing to first N rows per file (for testing). Example: --limit 10')
     batch_parser.add_argument('--merge', action='store_true', help='Merge all results into single file')
 
@@ -634,21 +625,16 @@ Examples:
             result = scraper.process_single_csv(
                 input_file=args.input_file,
                 output_dir=args.output_dir,
-                url_column=args.url_column,
-                select_columns=getattr(args, 'select_columns', None),
                 limit_rows=getattr(args, 'limit', None)
             )
 
             if result['status'] == 'completed':
-                print(f"✅ Processing completed successfully!")
-                print(f"📊 Success rate: {result['processing_stats']['success_rate']:.1f}%")
-                print(f"⚡ Processing per menit: {result['processing_stats'].get('processing_per_menit', 0):.2f} URL/min")
-                print(f"📧 Total emails found: {result['processing_stats']['total_emails']}")
-                print(f"✅ Validated emails: {result['processing_stats']['total_validated_emails']}")
-                print(f"📱 Phone numbers: {result['processing_stats']['total_phones']}")
-                print(f"💬 WhatsApp contacts: {result['processing_stats']['total_whatsapp']}")
+                stats = result['processing_stats']
+                print(f"Processing completed successfully!")
+                print(f"Rate : {stats['success_rate']:.1f}% | {stats.get('processing_per_menit', 0):.2f} URL/min")
+                print(f"Email : {stats['total_emails']} | Valid Email : {stats['total_validated_emails']} | Phone : {stats['total_phones']} | WA : {stats['total_whatsapp']}")
                 if 'final_output_file' in result['post_processing']:
-                    print(f"📄 Output file: {result['post_processing']['final_output_file']}")
+                    print(f"Result file: {result['post_processing']['final_output_file']}")
             else:
                 print(f"❌ Processing failed: {result.get('error', 'Unknown error')}")
                 sys.exit(1)
@@ -657,9 +643,7 @@ Examples:
             result = scraper.process_multiple_csv(
                 input_files=args.input_files,
                 output_dir=args.output_dir,
-                url_column=args.url_column,
                 merge_results=args.merge,
-                select_columns=getattr(args, 'select_columns', None),
                 limit_rows=getattr(args, 'limit', None)
             )
 

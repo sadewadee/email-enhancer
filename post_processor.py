@@ -309,15 +309,15 @@ class PostProcessor:
                 if name_columns and address_columns:
                     # Perfect: Use name + address for deduplication
                     dedup_columns = [name_columns[0], address_columns[0]]
-                    self.logger.info(f"🔍 Smart dedupe: Using {dedup_columns[0]} + {dedup_columns[1]}")
+                    self.logger.debug(f"🔍 Smart dedupe: Using {dedup_columns[0]} + {dedup_columns[1]}")
                 elif name_columns:
                     # Only name available: use name + url
                     dedup_columns = [name_columns[0], 'url'] if 'url' in df.columns else [name_columns[0]]
-                    self.logger.info(f"🔍 Smart dedupe: Using {' + '.join(dedup_columns)}")
+                    self.logger.debug(f"🔍 Smart dedupe: Using {' + '.join(dedup_columns)}")
                 elif address_columns:
                     # Only address available: use address + url
                     dedup_columns = [address_columns[0], 'url'] if 'url' in df.columns else [address_columns[0]]
-                    self.logger.info(f"🔍 Smart dedupe: Using {' + '.join(dedup_columns)}")
+                    self.logger.debug(f"🔍 Smart dedupe: Using {' + '.join(dedup_columns)}")
                 else:
                     # Fallback: use URL only (old behavior)
                     dedup_columns = ['url'] if 'url' in df.columns else []

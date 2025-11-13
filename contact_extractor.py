@@ -518,6 +518,26 @@ class ContactExtractor:
         dom_main = dom_main.strip('.-')
         dom_main = re.sub(r'\.\.+', '.', dom_main)
 
+        # Additional domain validation: reject if domain has invalid structure
+        # Example: gmail.comthesingingbowlgallery should be rejected
+        full_domain = f"{dom_main}.{tld}"
+
+        # Check if TLD is suspiciously long (likely has extra text appended)
+        if len(tld) > 10:  # Most valid TLDs are short (com, org, info, etc)
+            return None
+
+        # Check if domain has multiple TLDs concatenated (e.g., ".comname", ".comsite")
+        # Split domain and check each part
+        domain_parts = full_domain.split('.')
+        for part in domain_parts:
+            # If any part contains a known TLD as prefix with extra text, reject
+            for known_tld in ['com', 'net', 'org', 'edu', 'gov', 'io', 'ai', 'sg', 'uk', 'de']:
+                if part.startswith(known_tld) and len(part) > len(known_tld) and part != known_tld:
+                    # Check if remainder after TLD is alphabetic (not a valid domain part)
+                    remainder = part[len(known_tld):]
+                    if remainder.isalpha():
+                        return None
+
         return f"{local}@{dom_main}.{tld}"
 
     def _is_placeholder_email(self, normalized_email: str) -> bool:
