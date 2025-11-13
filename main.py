@@ -180,7 +180,9 @@ class EmailScraperValidator:
     def process_single_csv(self,
                            input_file: str,
                            output_dir: Optional[str] = None,
-                           url_column: str = 'url') -> Dict[str, Any]:
+                           url_column: str = 'url',
+                           select_columns: Optional[List[str]] = None,
+                           limit_rows: Optional[int] = None) -> Dict[str, Any]:
         """
         Process a single CSV file.
 
@@ -188,6 +190,8 @@ class EmailScraperValidator:
             input_file: Path to input CSV file
             output_dir: Output directory (default: same as input)
             url_column: Name of column containing URLs
+            select_columns: Optional list of columns to load (saves memory for large files)
+            limit_rows: Optional limit on number of rows to process (for testing)
 
         Returns:
             Dictionary with processing results
@@ -211,7 +215,9 @@ class EmailScraperValidator:
                 output_file=processed_file,
                 url_column=url_column,
                 batch_size=self.config['batch_size'],
-                input_chunksize=self.config.get('chunk_size', 0)
+                input_chunksize=self.config.get('chunk_size', 0),
+                select_columns=select_columns,
+                limit_rows=limit_rows
             )
 
             # Step 2: Post-processing
@@ -244,7 +250,9 @@ class EmailScraperValidator:
                            input_files: List[str],
                            output_dir: str,
                            url_column: str = 'url',
-                           merge_results: bool = True) -> Dict[str, Any]:
+                           merge_results: bool = True,
+                           select_columns: Optional[List[str]] = None,
+                           limit_rows: Optional[int] = None) -> Dict[str, Any]:
         """
         Process multiple CSV files.
 
@@ -267,7 +275,7 @@ class EmailScraperValidator:
             processed_files = []
 
             for input_file in input_files:
-                result = self.process_single_csv(input_file, output_dir, url_column)
+                result = self.process_single_csv(input_file, output_dir, url_column, select_columns, limit_rows)
                 individual_results.append(result)
 
                 if result['status'] == 'completed':
@@ -382,7 +390,8 @@ class EmailScraperValidator:
             # Deduplicate if enabled (in-place: no extra CSV created)
             if self.config.get('deduplicate', True):
                 dedup_stats = self.post_processor.deduplicate_contacts(
-                    processed_file, processed_file
+                    processed_file, processed_file,
+                    dedup_columns=self.config.get('dedup_columns', None)
                 )
                 results['deduplication'] = dedup_stats
 
@@ -522,6 +531,7 @@ def create_config_from_args(args) -> Dict[str, Any]:
         'output_format': args.output_format,
         'generate_report': generate_report,
         'deduplicate': deduplicate,
+        'dedup_columns': getattr(args, 'dedup_by', None),  # Custom dedup columns
         'log_level': args.log_level,
         # Safe light-load default: block_images ON, disable_resources OFF; --no-light-load disables both
         'block_images': False if getattr(args, 'no_light_load', False) else True,
@@ -563,12 +573,16 @@ Examples:
     single_parser.add_argument('input_file', help='Input CSV file path')
     single_parser.add_argument('--output-dir', help='Output directory (default: same as input)')
     single_parser.add_argument('--url-column', default='url', help='Name of URL column (default: url)')
+    single_parser.add_argument('--select-columns', nargs='+', metavar='COLUMN', help='Select specific columns to load (saves memory for large CSV files). Example: --select-columns title category website phone emails')
+    single_parser.add_argument('--limit', type=int, metavar='N', help='Limit processing to first N rows (for testing). Example: --limit 10')
 
     # Batch CSV processing
     batch_parser = subparsers.add_parser('batch', help='Process multiple CSV files')
     batch_parser.add_argument('input_files', nargs='+', help='Input CSV file paths')
     batch_parser.add_argument('--output-dir', required=True, help='Output directory')
     batch_parser.add_argument('--url-column', default='url', help='Name of URL column (default: url)')
+    batch_parser.add_argument('--select-columns', nargs='+', metavar='COLUMN', help='Select specific columns to load (saves memory for large CSV files). Example: --select-columns title category website phone emails')
+    batch_parser.add_argument('--limit', type=int, metavar='N', help='Limit processing to first N rows per file (for testing). Example: --limit 10')
     batch_parser.add_argument('--merge', action='store_true', help='Merge all results into single file')
 
     # Single URL processing
@@ -597,6 +611,7 @@ Examples:
         p.add_argument('--dedup', action='store_true', help='Enable deduplication output (redundant when default ON)')
         p.add_argument('--no-report', action='store_true', default=True, help='Skip generating summary report (default: skip)')
         p.add_argument('--no-dedup', action='store_true', default=False, help='Skip deduplication (default: dedupe ON)')
+        p.add_argument('--dedup-by', nargs='+', metavar='COLUMN', help='Columns to use for deduplication (e.g., --dedup-by name address). Default: smart detection (name+address if available, otherwise url)')
         p.add_argument('--log-level', choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'], default='INFO', help='Log level (default: INFO)')
         # Proxy configuration
         p.add_argument('--proxy-file', default='proxy.txt', help='Path to proxy file for automatic proxy detection (default: proxy.txt)')
@@ -619,7 +634,9 @@ Examples:
             result = scraper.process_single_csv(
                 input_file=args.input_file,
                 output_dir=args.output_dir,
-                url_column=args.url_column
+                url_column=args.url_column,
+                select_columns=getattr(args, 'select_columns', None),
+                limit_rows=getattr(args, 'limit', None)
             )
 
             if result['status'] == 'completed':
@@ -641,7 +658,9 @@ Examples:
                 input_files=args.input_files,
                 output_dir=args.output_dir,
                 url_column=args.url_column,
-                merge_results=args.merge
+                merge_results=args.merge,
+                select_columns=getattr(args, 'select_columns', None),
+                limit_rows=getattr(args, 'limit', None)
             )
 
             print(f"✅ Batch processing completed!")

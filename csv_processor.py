@@ -144,7 +144,7 @@ class CSVProcessor:
         """
         self.max_workers = max_workers
         self.timeout = timeout
-        self.scraper = WebScraper(timeout=timeout, block_images=block_images, disable_resources=disable_resources, network_idle=network_idle, cf_wait_timeout=cf_wait_timeout, skip_on_challenge=skip_on_challenge, proxy_file=proxy_file)
+        self.scraper = WebScraper(timeout=timeout, block_images=block_images, disable_resources=disable_resources, network_idle=network_idle, cf_wait_timeout=cf_wait_timeout, skip_on_challenge=skip_on_challenge, proxy_file=proxy_file, static_first=False)
         self.extractor = ContactExtractor()
         self.validator = EmailValidator(
             use_third_party=True,
@@ -251,7 +251,9 @@ class CSVProcessor:
                         output_file: str,
                         url_column: str = 'url',
                         batch_size: int = 100,
-                        input_chunksize: int = 0) -> Dict[str, Any]:
+                        input_chunksize: int = 0,
+                        select_columns: Optional[List[str]] = None,
+                        limit_rows: Optional[int] = None) -> Dict[str, Any]:
         """
         Process a CSV file with URLs in parallel.
 
@@ -260,6 +262,9 @@ class CSVProcessor:
             output_file: Path to output CSV file
             url_column: Name of the column containing URLs
             batch_size: Number of URLs to process in each batch
+            input_chunksize: Number of rows to read per chunk (0 = read all at once)
+            select_columns: Optional list of columns to load from CSV (saves memory for large files)
+            limit_rows: Optional limit on number of rows to process (for testing)
 
         Returns:
             Dictionary with processing statistics
@@ -270,6 +275,21 @@ class CSVProcessor:
             if url_column not in columns_df.columns:
                 raise ValueError(f"Column '{url_column}' not found in CSV file")
 
+            # Validate select_columns if provided
+            if select_columns:
+                # Ensure url_column is always included
+                if url_column not in select_columns:
+                    select_columns = list(select_columns) + [url_column]
+
+                # Validate all selected columns exist
+                missing_cols = [col for col in select_columns if col not in columns_df.columns]
+                if missing_cols:
+                    raise ValueError(f"Selected columns not found in CSV: {missing_cols}")
+
+                self.logger.info(f"📋 Loading only {len(select_columns)} columns: {select_columns}")
+            else:
+                select_columns = None  # Load all columns
+
             # Determine total rows with non-empty URL for progress bar
             total_urls = 0
             with open(input_file, 'r', encoding='utf-8', newline='') as f_in:
@@ -278,19 +298,30 @@ class CSVProcessor:
                     u = (r.get(url_column) or '').strip()
                     if u:
                         total_urls += 1
+                    # Apply limit if specified
+                    if limit_rows and total_urls >= limit_rows:
+                        break
+
+            if limit_rows:
+                self.logger.info(f"🔬 Testing mode: Processing limited to {total_urls} URLs (--limit {limit_rows})")
             self.logger.info(f"📊 Processing {total_urls} URLs with {self.max_workers} workers")
 
             # Prepare streaming CSV writer
             os.makedirs(os.path.dirname(output_file) or '.', exist_ok=True)
 
-            # Build header order: original cols (drop 'email' if present) + contacts + metrics
-            original_cols = [c for c in columns_df.columns if c != 'email']
+            # Build header order: No. + original cols (drop 'email' if present) + contacts + metrics
+            # Use select_columns if provided, otherwise use all columns
+            if select_columns:
+                original_cols = [c for c in select_columns if c != 'email']
+            else:
+                original_cols = [c for c in columns_df.columns if c != 'email']
             contact_cols = ['emails', 'phones', 'whatsapp', 'validated_emails']
             metrics_cols = [
                 'scraping_status', 'scraping_error', 'processing_time', 'pages_scraped',
                 'emails_found', 'phones_found', 'whatsapp_found', 'validated_emails_count'
             ]
-            header = original_cols + contact_cols + metrics_cols
+            # Add 'No.' as first column for row numbering
+            header = ['No.'] + original_cols + contact_cols + metrics_cols
 
             # Open output file and write header
             csv_file = open(output_file, 'w', newline='', encoding='utf-8')
@@ -370,6 +401,7 @@ class CSVProcessor:
                             original_row.pop('email', None)
 
                         output_row = {
+                            'No.': processed_count + 1,  # Row number starts from 1
                             **original_row,
                             'scraping_status': result['status'],
                             'scraping_error': result.get('error', ''),
@@ -435,16 +467,25 @@ class CSVProcessor:
 
                 try:
                     # Build chunk iterator (streaming if input_chunksize > 0)
+                    # Apply select_columns filter to reduce memory usage
+                    # Apply limit_rows if specified
                     if input_chunksize and input_chunksize > 0:
-                        chunk_iter = pd.read_csv(input_file, chunksize=input_chunksize)
+                        chunk_iter = pd.read_csv(input_file, chunksize=input_chunksize, usecols=select_columns, nrows=limit_rows)
                     else:
-                        chunk_iter = [pd.read_csv(input_file)]
+                        chunk_iter = [pd.read_csv(input_file, usecols=select_columns, nrows=limit_rows)]
+
+                    # Track total processed for limit enforcement
+                    total_processed_so_far = 0
 
                     # Process each chunk
                     for df_chunk in chunk_iter:
                         # Efficient URL data preparation - avoid slow iterrows()
                         url_data_list = []
                         for index in df_chunk.index:
+                            # Check if we've reached the limit
+                            if limit_rows and total_processed_so_far >= limit_rows:
+                                break
+
                             url = df_chunk.loc[index, url_column] if url_column in df_chunk.columns else None
                             if url and str(url).strip():
                                 url_data = {
@@ -453,6 +494,7 @@ class CSVProcessor:
                                     'original_data': df_chunk.loc[index].to_dict()
                                 }
                                 url_data_list.append(url_data)
+                                total_processed_so_far += 1
 
                         # Submit tasks in batches to control memory
                         for i in range(0, len(url_data_list), batch_size):

@@ -279,31 +279,62 @@ class PostProcessor:
         
         return df
     
-    def deduplicate_contacts(self, 
-                           input_file: str, 
+    def deduplicate_contacts(self,
+                           input_file: str,
                            output_file: str,
                            dedup_columns: List[str] = None) -> Dict[str, Any]:
         """
         Remove duplicate rows based on specified columns.
-        
+        Smart deduplication: Only removes rows when business name AND address are the same.
+
         Args:
             input_file: Path to input CSV file
             output_file: Path to output CSV file
-            dedup_columns: Columns to use for deduplication (default: ['url'])
-            
+            dedup_columns: Columns to use for deduplication (default: smart detection)
+
         Returns:
             Dictionary with deduplication statistics
         """
-        if dedup_columns is None:
-            dedup_columns = ['url']
-        
         try:
             # Read input CSV
             df = pd.read_csv(input_file)
             original_count = len(df)
-            
-            # Remove duplicates
-            df_dedup = df.drop_duplicates(subset=dedup_columns, keep='first')
+
+            # Smart deduplication: Auto-detect columns
+            if dedup_columns is None:
+                # Try to find business name and address columns
+                name_columns = [col for col in df.columns if col.lower() in ['name', 'business_name', 'company_name', 'company', 'business']]
+                address_columns = [col for col in df.columns if col.lower() in ['address', 'street', 'location', 'street_address', 'full_address']]
+
+                if name_columns and address_columns:
+                    # Perfect: Use name + address for deduplication
+                    dedup_columns = [name_columns[0], address_columns[0]]
+                    self.logger.info(f"🔍 Smart dedupe: Using {dedup_columns[0]} + {dedup_columns[1]}")
+                elif name_columns:
+                    # Only name available: use name + url
+                    dedup_columns = [name_columns[0], 'url'] if 'url' in df.columns else [name_columns[0]]
+                    self.logger.info(f"🔍 Smart dedupe: Using {' + '.join(dedup_columns)}")
+                elif address_columns:
+                    # Only address available: use address + url
+                    dedup_columns = [address_columns[0], 'url'] if 'url' in df.columns else [address_columns[0]]
+                    self.logger.info(f"🔍 Smart dedupe: Using {' + '.join(dedup_columns)}")
+                else:
+                    # Fallback: use URL only (old behavior)
+                    dedup_columns = ['url'] if 'url' in df.columns else []
+                    if dedup_columns:
+                        self.logger.info(f"⚠️  Fallback dedupe: Using URL only (no name/address columns found)")
+
+            # Remove duplicates if dedup_columns is not empty
+            if dedup_columns:
+                # Only use columns that exist in dataframe
+                valid_columns = [col for col in dedup_columns if col in df.columns]
+                if valid_columns:
+                    df_dedup = df.drop_duplicates(subset=valid_columns, keep='first')
+                else:
+                    df_dedup = df  # No valid columns, keep all rows
+            else:
+                df_dedup = df  # No dedup columns, keep all rows
+
             final_count = len(df_dedup)
             
             # Save deduplicated file

@@ -599,6 +599,37 @@ def _subprocess_fetch(q, url, headless, solve_cloudflare, network_idle, google_s
             except Exception:
                 pass
 
+            # Auto-scroll to trigger lazy-loaded content
+            # This runs AFTER network_idle, ensuring all JS observers are registered
+            try:
+                # Smooth scroll to bottom to trigger lazy load observers
+                page.evaluate("""
+                    async () => {
+                        // Scroll to bottom in steps to trigger all lazy load observers
+                        const scrollStep = window.innerHeight;
+                        const scrollDelay = 300; // ms between scrolls
+
+                        const totalHeight = document.body.scrollHeight;
+                        let currentScroll = 0;
+
+                        while (currentScroll < totalHeight) {
+                            window.scrollBy(0, scrollStep);
+                            currentScroll += scrollStep;
+                            await new Promise(resolve => setTimeout(resolve, scrollDelay));
+                        }
+
+                        // Ensure we're at the very bottom
+                        window.scrollTo(0, document.body.scrollHeight);
+
+                        // Wait for lazy-loaded content to render (2 seconds)
+                        await new Promise(resolve => setTimeout(resolve, 2000));
+                    }
+                """)
+
+            except Exception:
+                # If scroll fails, continue anyway (better to have partial content than fail)
+                pass
+
         # Import Scrapling inside child to avoid initializing its loggers in the parent process
         from scrapling.fetchers import StealthyFetcher  # noqa: E402
         
@@ -628,7 +659,7 @@ def _subprocess_fetch(q, url, headless, solve_cloudflare, network_idle, google_s
             'timeout': timeout,
             'block_images': block_images,
             'disable_resources': disable_resources,
-            'page_action': _page_action if (block_images or disable_resources) else None,
+            'page_action': _page_action,  # Always use page_action for auto-scroll
             'geoip': True  # Fix proxy warning - recommended when using proxies
         }
         
@@ -644,8 +675,17 @@ def _subprocess_fetch(q, url, headless, solve_cloudflare, network_idle, google_s
             'html_content': getattr(page, 'html_content', ''),
             'final_url': getattr(page, 'url', url),
         })
+    except BrokenPipeError:
+        # EPIPE error - browser process terminated, try to return partial result
+        try:
+            q.put({'ok': False, 'error': 'Browser process terminated (EPIPE)'})
+        except Exception:
+            pass  # Queue might also be broken
     except Exception as e:
-        q.put({'ok': False, 'error': str(e)})
+        try:
+            q.put({'ok': False, 'error': str(e)})
+        except Exception:
+            pass  # Silently fail if queue is broken
 
 
 class WebScraper:
@@ -1308,7 +1348,7 @@ class WebScraper:
                 url,
                 timeout=eff_timeout,
                 google_search=False,
-                network_idle=False,  # Always False for CF to prevent infinite waiting
+                network_idle=self.network_idle,  # Use configured network_idle for proper page loading
             )
             if page is None:
                 # Initial dynamic attempt timed out; annotate and proceed to CF handling/backoff
