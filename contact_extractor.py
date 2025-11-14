@@ -14,8 +14,13 @@ class ContactExtractor:
     """Extract and normalize contact information from HTML content."""
 
     def __init__(self):
-        # Email regex pattern with end boundary to avoid trailing garbage (e.g., comsendthank)
-        self.email_pattern = re.compile(r'[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}(?=[^A-Za-z]|$)')
+        # Email regex pattern with stricter validation:
+        # - Local part must start with letter (not number)
+        # - Domain must be valid (not file extensions)
+        # - TLD must be 2+ letters (not png, jpg, etc)
+        self.email_pattern = re.compile(
+            r'\b[A-Za-z][A-Za-z0-9._%+-]*@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b'
+        )
 
         # Phone number patterns - using proven patterns from sampler.txt
         self.phone_patterns = [
@@ -464,6 +469,18 @@ class ContactExtractor:
         else:
             local, dom_main, tld = m.group(1), m.group(2), m.group(3)
 
+        # EARLY CHECK: Reject file extensions BEFORE any trimming/normalization
+        file_extensions = {
+            'png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'bmp', 'ico', 'tiff',  # Images
+            'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx',  # Documents
+            'zip', 'rar', 'tar', 'gz', '7z',  # Archives
+            'mp3', 'mp4', 'avi', 'mov', 'wmv', 'flv',  # Media
+            'css', 'js', 'json', 'xml', 'html', 'htm',  # Web files
+            'txt', 'log', 'csv'  # Text files
+        }
+        if tld.lower() in file_extensions:
+            return None
+
         # Heuristic: if TLD starts with a common base then has extra letters (e.g., comname),
         # trim to the base so emails like example.comphone become example.com.
         # Guard: do NOT trim if the captured tld is a valid PSL token (e.g., 'company').
@@ -528,15 +545,43 @@ class ContactExtractor:
 
         # Check if domain has multiple TLDs concatenated (e.g., ".comname", ".comsite")
         # Split domain and check each part
+        # IMPORTANT: Only reject if it looks like garbage (e.g., "comname", "comsite")
+        # DO NOT reject valid words like "company", "community", "network"
         domain_parts = full_domain.split('.')
+
+        # Known valid domain words that start with TLD-like prefixes
+        valid_domain_words = {
+            'company', 'community', 'commercial', 'communication', 'compute', 'computer',
+            'network', 'networking', 'organic', 'organization', 'organisations',
+            'education', 'educational', 'government', 'information', 'international'
+        }
+
         for part in domain_parts:
+            # Skip if this is a known valid word
+            if part.lower() in valid_domain_words:
+                continue
+
             # If any part contains a known TLD as prefix with extra text, reject
             for known_tld in ['com', 'net', 'org', 'edu', 'gov', 'io', 'ai', 'sg', 'uk', 'de']:
                 if part.startswith(known_tld) and len(part) > len(known_tld) and part != known_tld:
-                    # Check if remainder after TLD is alphabetic (not a valid domain part)
+                    # Check if remainder after TLD looks like garbage (not a valid word)
                     remainder = part[len(known_tld):]
-                    if remainder.isalpha():
+                    # Only reject if remainder is short (< 6 chars) and all lowercase alpha
+                    # This catches "comname", "comsite" but not "company", "network"
+                    if remainder.isalpha() and len(remainder) < 6 and remainder.islower():
                         return None
+
+        # CRITICAL FIX: Reject local-part starting with numbers
+        # Valid emails should start with letter (RFC 5321 allows numbers, but it's uncommon and often spam)
+        if local and local[0].isdigit():
+            # Check if it's a phone number glued to email (e.g., "123-456-7890name@domain.com")
+            # If most of local-part is digits, reject
+            digit_count = sum(1 for c in local if c.isdigit())
+            if digit_count > len(local) * 0.5:  # More than 50% digits
+                return None
+            # If starts with 4+ consecutive digits, likely invalid
+            if re.match(r'^\d{4,}', local):
+                return None
 
         return f"{local}@{dom_main}.{tld}"
 

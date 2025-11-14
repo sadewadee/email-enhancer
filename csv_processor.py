@@ -103,13 +103,6 @@ class ProcessingRateCalculator:
         current_rate = self.get_current_rate()
         return remaining / current_rate if current_rate > 0 else None
     
-    def get_eta_minutes(self, total_urls: int) -> Optional[float]:
-        if total_urls <= self.total_processed:
-            return 0.0
-        remaining = total_urls - self.total_processed
-        current_rate = self.get_current_rate()
-        return remaining / current_rate if current_rate > 0 else None
-    
     def get_eta_formatted(self, total_urls: int) -> str:
         eta = self.get_eta_minutes(total_urls)
         if eta is None:
@@ -288,17 +281,21 @@ class CSVProcessor:
                 raise ValueError(f"No URL column found. Expected one of: url, website, link")
 
             # AUTO-SELECT only useful columns (ignore all the bloat)
-            useful_columns = ['title', 'name', 'category', 'address', 'phone', 'emails',
+            useful_columns = ['title', 'name', 'category', 'address', 'phone', 'emails', 'email',
                             'facebook', 'instagram', 'linkedin', 'twitter', 'whatsapp']
 
             # Select columns that exist in the CSV
-            select_columns = [url_column]  # Always include URL column
+            mandatory_cols_for_select = [
+                'name', 'street', 'city', 'country_code', 'url',
+                'phone_number', 'google_business_categories',
+                'facebook', 'instagram', 'email'
+            ]
+            select_set = set([url_column])
             for col in columns_df.columns:
                 col_lower = col.lower()
-                # Include if column name matches useful columns (case-insensitive)
-                if any(useful in col_lower for useful in useful_columns):
-                    if col not in select_columns:
-                        select_columns.append(col)
+                if (col in mandatory_cols_for_select) or any(useful in col_lower for useful in useful_columns):
+                    select_set.add(col)
+            select_columns = list(select_set)
 
             self.logger.debug(f"📋 Auto-selected {len(select_columns)} columns from {len(columns_df.columns)} total: {select_columns}")
 
@@ -321,19 +318,26 @@ class CSVProcessor:
             # Prepare streaming CSV writer
             os.makedirs(os.path.dirname(output_file) or '.', exist_ok=True)
 
-            # Build header order: No. + original cols (drop 'email' if present) + contacts + metrics
-            # Use select_columns if provided, otherwise use all columns
-            if select_columns:
-                original_cols = [c for c in select_columns if c != 'email']
-            else:
-                original_cols = [c for c in columns_df.columns if c != 'email']
-            contact_cols = ['emails', 'phones', 'whatsapp', 'validated_emails', 'validated_whatsapp']
+            # Build header with mandatory columns first, then additional scraper columns
+            # Mandatory columns that must always be present (even if empty)
+            mandatory_cols = [
+                'No', 'name', 'street', 'city', 'country_code', 'url',
+                'phone_number', 'google_business_categories',
+                'facebook', 'instagram'
+            ]
+
+            # Contact and validation columns added by scraper
+            # Note: 'email' from input CSV is placed after 'whatsapp'
+            contact_cols = ['emails', 'phones', 'whatsapp', 'email', 'validated_emails', 'validated_whatsapp']
+
+            # Metrics columns
             metrics_cols = [
                 'scraping_status', 'scraping_error', 'processing_time', 'pages_scraped',
                 'emails_found', 'phones_found', 'whatsapp_found', 'validated_emails_count', 'validated_whatsapp_count'
             ]
-            # Add 'No.' as first column for row numbering
-            header = ['No.'] + original_cols + contact_cols + metrics_cols
+
+            # Final header: mandatory + contacts + metrics
+            header = mandatory_cols + contact_cols + metrics_cols
 
             # Open output file and write header
             csv_file = open(output_file, 'w', newline='', encoding='utf-8')
@@ -423,14 +427,41 @@ class CSVProcessor:
                         total_validated_emails += validated_emails_count
                         total_processing_time += float(result.get('processing_time', 0) or 0)
 
-                        # Prepare CSV row
+                        # Prepare CSV row - map input data to mandatory columns
                         original_row = result.get('original_data', {}) or {}
-                        if 'email' in original_row:
-                            original_row.pop('email', None)
 
+                        # Helper function to get value from original_row with fallback to empty string
+                        def get_value(key):
+                            val = original_row.get(key, '')
+                            return '' if pd.isna(val) else str(val)
+
+                        # Build output row with all mandatory columns mapped from input
                         output_row = {
-                            'No.': processed_count + 1,  # Row number starts from 1
-                            **original_row,
+                            # Mandatory columns
+                            'No': str(processed_count + 1),
+                            'name': get_value('name'),
+                            'street': get_value('street'),
+                            'city': get_value('city'),
+                            'country_code': get_value('country_code'),
+                            'url': result.get('url', ''),
+                            'phone_number': get_value('phone_number'),
+                            'google_business_categories': get_value('google_business_categories'),
+                            'facebook': get_value('facebook'),
+                            'instagram': get_value('instagram'),
+                            # Scraped contact columns
+                            'emails': '; '.join(emails_list),
+                            'phones': '; '.join(result.get('phones', []) or []),
+                            'whatsapp': '; '.join(whatsapp_list),
+                            'email': get_value('email'),  # Original email column from input (moved to after whatsapp)
+                            'validated_emails': '; '.join([
+                                f"{email} (reason:{validation_result.get('reason', 'unknown')}, conf:{validation_result.get('confidence', 'unknown')}, big:{validation_result.get('is_big_provider', False)})"
+                                for email, validation_result in validated_emails.items()
+                            ]),
+                            'validated_whatsapp': '; '.join([
+                                f"{number} (valid:{validation_result.get('valid', False)}, type:{validation_result.get('type', 'unknown')}, country:{validation_result.get('country', 'unknown')}, reason:{validation_result.get('reason', 'unknown')})"
+                                for number, validation_result in validated_whatsapp.items()
+                            ]),
+                            # Metrics columns
                             'scraping_status': result['status'],
                             'scraping_error': result.get('error', ''),
                             'processing_time': result.get('processing_time', 0),
@@ -440,22 +471,7 @@ class CSVProcessor:
                             'whatsapp_found': whatsapp_count,
                             'validated_emails_count': validated_emails_count,
                             'validated_whatsapp_count': validated_whatsapp_count,
-                            'emails': '; '.join(emails_list),
-                            'phones': '; '.join(result.get('phones', []) or []),
-                            'whatsapp': '; '.join(whatsapp_list),
-                            'validated_emails': '; '.join([
-                                f"{email} (reason:{validation_result.get('reason', 'unknown')}, conf:{validation_result.get('confidence', 'unknown')}, big:{validation_result.get('is_big_provider', False)})"
-                                for email, validation_result in validated_emails.items()
-                            ]),
-                            'validated_whatsapp': '; '.join([
-                                f"{number} (valid:{validation_result.get('valid', False)}, type:{validation_result.get('type', 'unknown')}, country:{validation_result.get('country', 'unknown')}, reason:{validation_result.get('reason', 'unknown')})"
-                                for number, validation_result in validated_whatsapp.items()
-                            ])
                         }
-
-                        for key in header:
-                            if key not in output_row:
-                                output_row[key] = ''
 
                         # Batch CSV writing for better I/O performance
                         with writer_lock:
@@ -521,10 +537,20 @@ class CSVProcessor:
 
                             url = df_chunk.loc[index, url_column] if url_column in df_chunk.columns else None
                             if url and str(url).strip():
+                                # Filter out Unnamed columns from original data and convert NaN to empty string
+                                row_dict = df_chunk.loc[index].to_dict()
+                                filtered_data = {}
+                                for k, v in row_dict.items():
+                                    if not k.startswith('Unnamed:'):
+                                        # Convert NaN/None to empty string, otherwise keep the value
+                                        if pd.isna(v):
+                                            filtered_data[k] = ''
+                                        else:
+                                            filtered_data[k] = v
                                 url_data = {
                                     'index': index,
                                     'url': str(url).strip(),
-                                    'original_data': df_chunk.loc[index].to_dict()
+                                    'original_data': filtered_data
                                 }
                                 url_data_list.append(url_data)
                                 total_processed_so_far += 1
@@ -767,7 +793,7 @@ class CSVProcessor:
                 output_file = os.path.join(output_dir, f"{base_name}_processed.csv")
 
                 # Process file
-                stats = self.process_csv_file(input_file, output_file, url_column)
+                stats = self.process_csv_file(input_file, output_file)
 
                 # Update overall statistics
                 overall_stats['files_processed'] += 1
@@ -805,8 +831,7 @@ if __name__ == "__main__":
     # Process single CSV file
     stats = processor.process_csv_file(
         input_file="input_urls.csv",
-        output_file="output_results.csv",
-        url_column="website_url"
+        output_file="output_results.csv"
     )
 
     print(f"Processing completed with {stats['success_rate']:.1f}% success rate")

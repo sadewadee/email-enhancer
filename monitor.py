@@ -8,6 +8,7 @@ PYTHON_BIN = sys.executable
 import time
 import logging
 import subprocess
+import gsheets_sync
 import threading
 import csv
 import re
@@ -182,7 +183,11 @@ def start_main_for_country(country: str, logger: logging.Logger) -> bool:
         "--output-dir",
         str(DATA_DIR),
         "--workers",
-        "25",
+        "15",
+        "--timeout",
+        "60",  # Request timeout in seconds
+        "--cf-wait-timeout",
+        "120",  # Cloudflare challenge timeout (increased from default 60)
     ]
     log_file = Path("logs") / f"main_{country}.log"
     logger.info(f"Menjalankan: {' '.join(cmd)} | py: {PYTHON_BIN} | log: {log_file}")
@@ -243,6 +248,34 @@ def monitor_loop():
             # Hint untuk status selesai semua input saat ini
             if not unprocessed and total_running == 0:
                 logger.info("Tidak ada file baru di 'country' dan tidak ada proses berjalan.")
+
+            try:
+                spreadsheet_id = os.environ.get("SPREADSHEET_ID", "1aL_7HyyGpTKogW0nniiOq0n2w9O7K77fTBAEVADnItY")
+                if spreadsheet_id:
+                    did_import = False
+                    last_sid = None
+                    for csv_file in DATA_DIR.glob("*.csv"):
+                        title = csv_file.stem
+                        if title.endswith('_processed'):
+                            title = title[:-10]
+                        try:
+                            ss = gsheets_sync._get_client().open_by_key(spreadsheet_id)
+                            try:
+                                ss.worksheet(title)
+                                continue
+                            except Exception:
+                                pass
+                            last_sid = gsheets_sync.sync_csv_to_sheet(str(csv_file), spreadsheet_id, title, replace=True)
+                            did_import = True
+                            logger.info(f"Sinkronisasi ke Google Sheets selesai: {csv_file} -> tab '{title}'")
+                        except Exception as e:
+                            logger.error(f"Sinkronisasi ke Google Sheets gagal untuk {csv_file}: {e}")
+                    if did_import and last_sid:
+                        gsheets_sync.build_global_summary(last_sid, "Summary")
+                else:
+                    logger.debug("SPREADSHEET_ID tidak diset; melewati sinkronisasi Google Sheets")
+            except Exception as e:
+                logger.error(f"Kesalahan sinkronisasi Google Sheets: {e}")
 
         except Exception as e:
             logging.getLogger("monitor").error(f"Kesalahan loop monitoring: {e}")

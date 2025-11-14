@@ -1251,11 +1251,25 @@ class WebScraper:
             # Keep silent on timeout to avoid spam
             return None
 
-        # Ensure child exits
+        # Ensure child exits cleanly
         try:
             proc.join(timeout=3)
+            # If process still alive after timeout, force kill it
+            if proc.is_alive():
+                proc.terminate()
+                proc.join(timeout=2)
+                if proc.is_alive():
+                    proc.kill()
+                    proc.join(timeout=1)
         except Exception:
             pass
+        finally:
+            # Clean up queue resources
+            try:
+                result_q.close()
+                result_q.join_thread()
+            except Exception:
+                pass
 
         if msg.get('ok'):
             return SimpleNamespace(
