@@ -74,7 +74,7 @@ class EmailScraperValidator:
     def _get_default_config(self) -> Dict[str, Any]:
         """Get default configuration."""
         return {
-            'max_workers': 100,
+            'max_workers': 50,
             'timeout': 120,
             'batch_size': 100,
             'chunk_size': 0,

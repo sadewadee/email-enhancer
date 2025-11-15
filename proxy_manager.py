@@ -154,16 +154,21 @@ class ProxyManager:
             
             return proxy.copy()
     
-    def mark_proxy_failed(self, proxy_server: str) -> None:
+    def mark_proxy_failed(self, proxy_server: str, reason: str = "Unknown error") -> None:
         """
         Mark a proxy as failed.
-        
+
         Args:
             proxy_server: Proxy server (host:port) to mark as failed
+            reason: Reason for failure (error message)
         """
         with self.lock:
             self.failed_proxies.add(proxy_server)
-            self.logger.warning(f"❌ Marked proxy as failed: {proxy_server}")
+            # Use logger.debug to avoid progress bar collision (INFO only shows on console)
+            self.logger.debug(f"❌ Proxy failed: {proxy_server} | Reason: {reason[:100]}")
+            # Summary to console without details to avoid collision
+            available = len(self.proxies) - len(self.failed_proxies)
+            self.logger.info(f"⚠️  Proxy {proxy_server} failed ({available}/{len(self.proxies)} proxies still available)")
     
     def get_random_proxy(self) -> Optional[Dict[str, Any]]:
         """

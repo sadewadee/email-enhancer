@@ -345,7 +345,8 @@ class CSVProcessor:
             writer.writeheader()
 
             # Stats counters
-            processed_count = 0
+            processed_count = 0  # URLs fully processed (validated + written)
+            scraped_count = 0    # URLs scraped (producer done)
             success_count = 0
             total_emails = 0
             total_validated_emails = 0
@@ -366,145 +367,128 @@ class CSVProcessor:
                 writer_lock = threading.Lock()
                 progress_lock = threading.Lock()
 
-                # Optimize SMTP worker count for better performance
-                smtp_workers = min(3, max(1, self.max_workers // 3))
+                # Validation workers: 70% of scraping workers (validation is slower process)
+                smtp_workers = max(3, int(self.max_workers * 0.7))
 
-                # Shared queue between producer (scraping) and consumer (SMTP validation)
-                scraped_queue: "queue.Queue[Dict[str, Any] | None]" = queue.Queue(maxsize=batch_size * 2)
+                # Queue size: 2x total workers for adequate buffering
+                queue_size = (self.max_workers + smtp_workers) * 2
+
+                # Shared queue between producer (scraping) and consumer (API validation)
+                scraped_queue: "queue.Queue[Dict[str, Any] | None]" = queue.Queue(maxsize=queue_size)
 
                 def consumer_loop():
-                    nonlocal processed_count, success_count, total_emails, total_validated_emails, total_phones, total_whatsapp, total_processing_time, per_menit, last_log_time
+                    nonlocal processed_count, scraped_count, success_count, total_emails, total_validated_emails, total_phones, total_whatsapp, total_processing_time, per_menit, last_log_time
                     while True:
                         item = scraped_queue.get()
                         if item is None:
                             scraped_queue.task_done()
                             break
 
-                        result = item
-                        url = result.get('url', 'unknown')
-                        self.logger.debug(f"Consumer processing: {url} | status: {result.get('status')} | emails: {len(result.get('emails', []))}")
+                        try:
+                            result = item
+                            url = result.get('url', 'unknown')
+                            self.logger.debug(f"Consumer processing: {url} | status: {result.get('status')} | emails: {len(result.get('emails', []))}")
 
-                        # Efficient email validation with reduced logging
-                        validated_emails = {}
-                        emails_list = result.get('emails', []) or []
-                        if emails_list:
-                            self.logger.debug(f"Validating {len(emails_list)} emails from {url}: {emails_list}")
+                            validated_emails = {}
+                            emails_list = result.get('emails', []) or []
+                            if emails_list:
+                                self.logger.debug(f"Validating {len(emails_list)} emails from {url}: {emails_list}")
+                                try:
+                                    validated_emails = self.validator.validate_batch(emails_list)
+                                    for email, validation in validated_emails.items():
+                                        self.logger.debug(f"Email validation: {email} | valid: {validation.get('valid')} | reason: {validation.get('reason')} | conf: {validation.get('confidence')} | big: {validation.get('is_big_provider')}")
+                                except Exception as e:
+                                    self.logger.debug(f"Email validation failed for {url}: {str(e)}")
+                                    validated_emails = {}
+                            result['validated_emails'] = validated_emails
+
+                            validated_whatsapp = {}
+                            whatsapp_list = result.get('whatsapp', []) or []
+                            if whatsapp_list:
+                                self.logger.debug(f"Validating {len(whatsapp_list)} WhatsApp numbers from {url}: {whatsapp_list}")
+                                try:
+                                    validated_whatsapp = self.whatsapp_validator.validate_batch(whatsapp_list)
+                                    for number, validation in validated_whatsapp.items():
+                                        self.logger.debug(f"WhatsApp validation: {number} | valid: {validation.get('valid')} | reason: {validation.get('reason')} | type: {validation.get('type')} | country: {validation.get('country')}")
+                                except Exception as e:
+                                    self.logger.debug(f"WhatsApp validation failed for {url}: {str(e)}")
+                                    validated_whatsapp = {}
+                            result['validated_whatsapp'] = validated_whatsapp
+
+                            emails_count = len(emails_list)
+                            phones_count = len(result.get('phones', []) or [])
+                            whatsapp_count = len(whatsapp_list)
+                            validated_emails_count = len(validated_emails)
+                            validated_whatsapp_count = len(validated_whatsapp)
+
+                            total_emails += emails_count
+                            total_phones += phones_count
+                            total_whatsapp += whatsapp_count
+                            total_validated_emails += validated_emails_count
+                            total_processing_time += float(result.get('processing_time', 0) or 0)
+
+                            original_row = result.get('original_data', {}) or {}
+
+                            def get_value(key):
+                                val = original_row.get(key, '')
+                                return '' if pd.isna(val) else str(val)
+
+                            output_row = {
+                                'No': str(processed_count + 1),
+                                'name': get_value('name'),
+                                'street': get_value('street'),
+                                'city': get_value('city'),
+                                'country_code': get_value('country_code'),
+                                'url': result.get('url', ''),
+                                'phone_number': get_value('phone_number'),
+                                'google_business_categories': get_value('google_business_categories'),
+                                'facebook': get_value('facebook'),
+                                'instagram': get_value('instagram'),
+                                'emails': '; '.join(emails_list),
+                                'phones': '; '.join(result.get('phones', []) or []),
+                                'whatsapp': '; '.join(whatsapp_list),
+                                'email': get_value('email'),
+                                'validated_emails': '; '.join([
+                                    f"{email} (reason:{validation_result.get('reason', 'unknown')}, conf:{validation_result.get('confidence', 'unknown')}, big:{validation_result.get('is_big_provider', False)})"
+                                    for email, validation_result in validated_emails.items()
+                                ]),
+                                'validated_whatsapp': '; '.join([
+                                    f"{number} (valid:{validation_result.get('valid', False)}, type:{validation_result.get('type', 'unknown')}, country:{validation_result.get('country', 'unknown')}, reason:{validation_result.get('reason', 'unknown')})"
+                                    for number, validation_result in validated_whatsapp.items()
+                                ]),
+                                'scraping_status': result['status'],
+                                'scraping_error': result.get('error', ''),
+                                'processing_time': result.get('processing_time', 0),
+                                'pages_scraped': result.get('pages_scraped', 0),
+                                'emails_found': emails_count,
+                                'phones_found': phones_count,
+                                'whatsapp_found': whatsapp_count,
+                                'validated_emails_count': validated_emails_count,
+                                'validated_whatsapp_count': validated_whatsapp_count,
+                            }
+
+                            with writer_lock:
+                                writer.writerow(output_row)
+                                if processed_count % 10 == 0:
+                                    csv_file.flush()
+
+                            with progress_lock:
+                                if result['status'] == 'success':
+                                    success_count += 1
+                                processed_count += 1
+                                per_menit = rate_calculator.get_current_rate()
+
+                        except Exception as e:
                             try:
-                                validated_emails = self.validator.validate_batch(emails_list)
-                                # Log validation results for each email
-                                for email, validation in validated_emails.items():
-                                    self.logger.debug(f"Email validation: {email} | valid: {validation.get('valid')} | reason: {validation.get('reason')} | conf: {validation.get('confidence')} | big: {validation.get('is_big_provider')}")
-                            except Exception as e:
-                                self.logger.debug(f"Email validation failed for {url}: {str(e)}")
-                                validated_emails = {}
-                        result['validated_emails'] = validated_emails
-
-                        # WhatsApp validation
-                        validated_whatsapp = {}
-                        whatsapp_list = result.get('whatsapp', []) or []
-                        if whatsapp_list:
-                            self.logger.debug(f"Validating {len(whatsapp_list)} WhatsApp numbers from {url}: {whatsapp_list}")
+                                url = (item or {}).get('url', 'unknown')
+                            except Exception:
+                                url = 'unknown'
+                            self.logger.error(f"Consumer error: {url} | {str(e)}")
+                        finally:
                             try:
-                                validated_whatsapp = self.whatsapp_validator.validate_batch(whatsapp_list)
-                                # Log validation results for each WhatsApp number
-                                for number, validation in validated_whatsapp.items():
-                                    self.logger.debug(f"WhatsApp validation: {number} | valid: {validation.get('valid')} | reason: {validation.get('reason')} | type: {validation.get('type')} | country: {validation.get('country')}")
-                            except Exception as e:
-                                self.logger.debug(f"WhatsApp validation failed for {url}: {str(e)}")
-                                validated_whatsapp = {}
-                        result['validated_whatsapp'] = validated_whatsapp
-
-                        # Update stats
-                        emails_count = len(emails_list)
-                        phones_count = len(result.get('phones', []) or [])
-                        whatsapp_count = len(whatsapp_list)
-                        validated_emails_count = len(validated_emails)
-                        validated_whatsapp_count = len(validated_whatsapp)
-
-                        total_emails += emails_count
-                        total_phones += phones_count
-                        total_whatsapp += whatsapp_count
-                        total_validated_emails += validated_emails_count
-                        total_processing_time += float(result.get('processing_time', 0) or 0)
-
-                        # Prepare CSV row - map input data to mandatory columns
-                        original_row = result.get('original_data', {}) or {}
-
-                        # Helper function to get value from original_row with fallback to empty string
-                        def get_value(key):
-                            val = original_row.get(key, '')
-                            return '' if pd.isna(val) else str(val)
-
-                        # Build output row with all mandatory columns mapped from input
-                        output_row = {
-                            # Mandatory columns
-                            'No': str(processed_count + 1),
-                            'name': get_value('name'),
-                            'street': get_value('street'),
-                            'city': get_value('city'),
-                            'country_code': get_value('country_code'),
-                            'url': result.get('url', ''),
-                            'phone_number': get_value('phone_number'),
-                            'google_business_categories': get_value('google_business_categories'),
-                            'facebook': get_value('facebook'),
-                            'instagram': get_value('instagram'),
-                            # Scraped contact columns
-                            'emails': '; '.join(emails_list),
-                            'phones': '; '.join(result.get('phones', []) or []),
-                            'whatsapp': '; '.join(whatsapp_list),
-                            'email': get_value('email'),  # Original email column from input (moved to after whatsapp)
-                            'validated_emails': '; '.join([
-                                f"{email} (reason:{validation_result.get('reason', 'unknown')}, conf:{validation_result.get('confidence', 'unknown')}, big:{validation_result.get('is_big_provider', False)})"
-                                for email, validation_result in validated_emails.items()
-                            ]),
-                            'validated_whatsapp': '; '.join([
-                                f"{number} (valid:{validation_result.get('valid', False)}, type:{validation_result.get('type', 'unknown')}, country:{validation_result.get('country', 'unknown')}, reason:{validation_result.get('reason', 'unknown')})"
-                                for number, validation_result in validated_whatsapp.items()
-                            ]),
-                            # Metrics columns
-                            'scraping_status': result['status'],
-                            'scraping_error': result.get('error', ''),
-                            'processing_time': result.get('processing_time', 0),
-                            'pages_scraped': result.get('pages_scraped', 0),
-                            'emails_found': emails_count,
-                            'phones_found': phones_count,
-                            'whatsapp_found': whatsapp_count,
-                            'validated_emails_count': validated_emails_count,
-                            'validated_whatsapp_count': validated_whatsapp_count,
-                        }
-
-                        # Batch CSV writing for better I/O performance
-                        with writer_lock:
-                            writer.writerow(output_row)
-                            # Flush periodically for data safety (file handle in context)
-                            if processed_count % 10 == 0:
-                                csv_file.flush()
-
-                        # Fast progress update - calculations moved outside lock
-                        rate_calculator.add_completion()
-                        
-                        # Calculate stats outside critical section
-                        current_rate = rate_calculator.get_current_rate()
-                        inst_rate = rate_calculator.get_instantaneous_rate(30)
-                        eta_str = rate_calculator.get_eta_formatted(total_urls)
-                        
-                        # Minimal lock duration for thread safety
-                        with progress_lock:
-                            if result['status'] == 'success':
-                                success_count += 1
-                            processed_count += 1
-                            pbar.update(1)
-
-                            # Update display every completion for better responsiveness
-                            pbar.set_postfix({
-                                "rate": f"{current_rate:.1f}/min",
-                                "inst": f"{inst_rate:.1f}",
-                                "ETA": eta_str
-                            })
-
-                        per_menit = current_rate
-
-                        scraped_queue.task_done()
+                                scraped_queue.task_done()
+                            except Exception:
+                                pass
 
                 # Start consumer pool
                 consumer_executor = ThreadPoolExecutor(max_workers=smtp_workers)
@@ -514,6 +498,7 @@ class CSVProcessor:
                 # Start producer pool
                 producer_executor = ThreadPoolExecutor(max_workers=self.max_workers)
 
+                sentinel_sent = False
                 try:
                     # Build chunk iterator (streaming if input_chunksize > 0)
                     # Apply select_columns filter to reduce memory usage
@@ -589,23 +574,57 @@ class CSVProcessor:
                                     }
                                     self.logger.error(f"Error in producer result: {str(e)}")
 
+                                # Update progress bar immediately after scraping (PRODUCER UPDATE)
+                                rate_calculator.add_completion()
+                                current_rate = rate_calculator.get_current_rate()
+                                inst_rate = rate_calculator.get_instantaneous_rate(30)
+                                eta_str = rate_calculator.get_eta_formatted(total_urls)
+                                queue_size = scraped_queue.qsize()
+
+                                with progress_lock:
+                                    scraped_count += 1
+                                    pbar.update(1)
+                                    pbar.set_postfix({
+                                        "rate": f"{current_rate:.1f}/min",
+                                        "inst": f"{inst_rate:.1f}",
+                                        "queue": queue_size,
+                                        "ETA": eta_str
+                                    })
+
                                 # Push to queue for consumer validation and writing
                                 scraped_queue.put(result)
 
-                    # All producers submitted and completed; shut down producer executor
                     producer_executor.shutdown(wait=True)
 
-                    # Signal consumers to exit by sending sentinel values
                     for _ in range(smtp_workers):
                         scraped_queue.put(None)
+                    sentinel_sent = True
 
-                    # Wait until all queued items are processed
-                    scraped_queue.join()
+                    deadline = time.time() + 60
+                    while True:
+                        try:
+                            unfinished = getattr(scraped_queue, 'unfinished_tasks', 0)
+                        except Exception:
+                            unfinished = 0
+                        if unfinished == 0:
+                            break
+                        if time.time() > deadline:
+                            self.logger.error("Queue join timeout; forcing shutdown")
+                            break
+                        time.sleep(0.1)
 
-                    # Shutdown consumer pool
                     consumer_executor.shutdown(wait=True)
 
                 finally:
+                    try:
+                        if not sentinel_sent:
+                            for _ in range(smtp_workers):
+                                try:
+                                    scraped_queue.put(None)
+                                except Exception:
+                                    break
+                    except Exception:
+                        pass
                     try:
                         producer_executor.shutdown(wait=False)
                     except Exception:

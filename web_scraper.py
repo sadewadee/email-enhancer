@@ -522,11 +522,6 @@ def _subprocess_fetch(q, url, headless, solve_cloudflare, network_idle, google_s
     Logging is globally disabled and stdout/stderr are wrapped to suppress Cloudflare progress spam.
     """
     try:
-        # Disable all Python logging in child process
-        try:
-            logging.disable(logging.CRITICAL)
-        except Exception:
-            pass
 
         # Wrap stdout/stderr to suppress known Cloudflare progress lines
         try:
@@ -1239,7 +1234,6 @@ class WebScraper:
             msg = None
 
         if msg is None:
-            # Hard timeout: terminate child process to stop any ongoing logging loops
             try:
                 proc.terminate()
             except Exception:
@@ -1248,7 +1242,10 @@ class WebScraper:
                 proc.join(timeout=3)
             except Exception:
                 pass
-            # Keep silent on timeout to avoid spam
+            try:
+                self.logger.error(f"Dynamic fetch timeout: {url}")
+            except Exception:
+                pass
             return None
 
         # Ensure child exits cleanly
@@ -1279,13 +1276,14 @@ class WebScraper:
                 proxy_used=proxy_config.get('server') if proxy_config else None
             )
         else:
-            # Mark proxy as failed if error occurred
             if proxy_config and 'server' in proxy_config:
                 error_msg = msg.get('error', '')
-                # Check if error is proxy-related
                 if any(keyword in error_msg.lower() for keyword in ['proxy', 'connection', 'timeout', 'refused']):
-                    self.proxy_manager.mark_proxy_failed(proxy_config['server'])
-
+                    self.proxy_manager.mark_proxy_failed(proxy_config['server'], reason=error_msg)
+            try:
+                self.logger.error(f"Dynamic fetch error: {url} | {msg.get('error', '')}")
+            except Exception:
+                pass
         return None
 
     def scrape_url(self, url: str) -> Dict:

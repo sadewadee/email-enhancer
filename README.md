@@ -237,17 +237,13 @@ https://host:port
 - Failure detection and retry with different proxy
 - Playwright-compatible format conversion
 
-See guide: `PROXY_SETUP.md`
+See [DOCUMENTATION.md](DOCUMENTATION.md#proxy-support) for detailed proxy setup guide.
 
-## 📚 Related Documentation
+## 📚 Documentation
 
-- `Technical Documentation_ Email Scraper & Validator.md` - Detailed technical documentation
-- `CLOUDFLARE_BYPASS_SOLUTION.md` - Cloudflare bypass implementation
-- `FINAL_CLOUDFLARE_SOLUTION.md` - Latest Cloudflare solution
-- `QUICK_START_FIX.md` - Quick troubleshooting guide
-- `DEVELOPMENT.md` - Development guide
-- `DEPLOYMENT_CHECKLIST.md` - Production deployment checklist
-- `PROXY_SETUP.md` - Proxy configuration guide
+- **[DOCUMENTATION.md](DOCUMENTATION.md)** - Comprehensive documentation (setup, usage, configuration, troubleshooting, development)
+- **[CHANGELOG.md](CHANGELOG.md)** - Version history and updates
+- **[README.md](README.md)** - Quick start guide (this file)
 
 ## 🛠️ Logging & Troubleshooting
 
