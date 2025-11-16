@@ -30,12 +30,12 @@ from typing import Dict, Any, Optional
 
 class BrowserFingerprinter:
     """Advanced browser fingerprinting to avoid detection"""
-    
+
     def __init__(self, profile_type: str = "random"):
         self.profile_type = profile_type
         self.profiles = self._get_fingerprint_profiles()
         self.current_profile = self._select_profile()
-    
+
     def _get_fingerprint_profiles(self) -> Dict[str, Dict]:
         """Comprehensive fingerprint profiles with realistic variations"""
         return {
@@ -120,20 +120,20 @@ class BrowserFingerprinter:
                 "os": "Linux"
             }
         }
-    
+
     def _select_profile(self) -> Dict[str, Any]:
         """Select fingerprint profile"""
         if self.profile_type == "random":
             profile_name = random.choice(list(self.profiles.keys()))
         else:
             profile_name = self.profile_type if self.profile_type in self.profiles else list(self.profiles.keys())[0]
-        
+
         return self.profiles[profile_name].copy()
-    
+
     def get_enhanced_page_action(self):
         """Create enhanced page action with comprehensive fingerprint spoofing"""
         profile = self.current_profile
-        
+
         def _enhanced_page_action(page):
             try:
                 # Set viewport
@@ -141,77 +141,77 @@ class BrowserFingerprinter:
                     width=profile["viewport"]["width"],
                     height=profile["viewport"]["height"]
                 )
-                
+
                 # Inject comprehensive fingerprint spoofing script
                 page.add_init_script(f"""
                     // ======================
                     // COMPREHENSIVE BROWSER FINGERPRINT SPOOFING
                     // ======================
-                    
+
                     // Override navigator properties
                     Object.defineProperty(navigator, 'userAgent', {{
                         get: () => '{profile["user_agent"]}'
                     }});
-                    
+
                     Object.defineProperty(navigator, 'platform', {{
                         get: () => '{profile["platform"]}'
                     }});
-                    
+
                     Object.defineProperty(navigator, 'hardwareConcurrency', {{
                         get: () => {profile["hardware_concurrency"]}
                     }});
-                    
+
                     Object.defineProperty(navigator, 'deviceMemory', {{
                         get: () => {profile["device_memory"]}
                     }});
-                    
+
                     Object.defineProperty(navigator, 'language', {{
                         get: () => '{profile["language"].split(",")[0]}'
                     }});
-                    
+
                     Object.defineProperty(navigator, 'languages', {{
                         get: () => {json.dumps([lang.strip() for lang in profile["language"].split(",")])}
                     }});
-                    
+
                     Object.defineProperty(navigator, 'appVersion', {{
                         get: () => '{profile["user_agent"].split("Mozilla/")[1] if "Mozilla/" in profile["user_agent"] else "5.0"}'
                     }});
-                    
+
                     Object.defineProperty(navigator, 'vendor', {{
                         get: () => '{"Apple Computer, Inc." if "Safari" in profile["user_agent"] else "Google Inc."}'
                     }});
-                    
+
                     Object.defineProperty(navigator, 'doNotTrack', {{
                         get: () => '1'
                     }});
-                    
+
                     // Override screen properties with realistic variations
                     const screenVariation = Math.floor(Math.random() * 3) - 1; // -1, 0, or 1
-                    
+
                     Object.defineProperty(screen, 'width', {{
                         get: () => {profile["screen"]["width"]} + screenVariation
                     }});
-                    
+
                     Object.defineProperty(screen, 'height', {{
                         get: () => {profile["screen"]["height"]} + screenVariation
                     }});
-                    
+
                     Object.defineProperty(screen, 'availWidth', {{
                         get: () => {profile["screen"]["width"]} + screenVariation
                     }});
-                    
+
                     Object.defineProperty(screen, 'availHeight', {{
                         get: () => {profile["screen"]["height"]} - 40 + screenVariation
                     }});
-                    
+
                     Object.defineProperty(screen, 'colorDepth', {{
                         get: () => {profile["screen"]["colorDepth"]}
                     }});
-                    
+
                     Object.defineProperty(screen, 'pixelDepth', {{
                         get: () => {profile["screen"]["colorDepth"]}
                     }});
-                    
+
                     // Override WebGL fingerprint
                     const getParameter = WebGLRenderingContext.prototype.getParameter;
                     WebGLRenderingContext.prototype.getParameter = function(parameter) {{
@@ -223,7 +223,7 @@ class BrowserFingerprinter:
                         }}
                         return getParameter.call(this, parameter);
                     }};
-                    
+
                     // Also override WebGL2 if available
                     if (window.WebGL2RenderingContext) {{
                         const getParameter2 = WebGL2RenderingContext.prototype.getParameter;
@@ -237,7 +237,7 @@ class BrowserFingerprinter:
                             return getParameter2.call(this, parameter);
                         }};
                     }}
-                    
+
                     // Override timezone with realistic handling
                     const originalDateTimeFormat = Intl.DateTimeFormat;
                     Intl.DateTimeFormat = function(...args) {{
@@ -249,7 +249,7 @@ class BrowserFingerprinter:
                         }}
                         return new originalDateTimeFormat(...args);
                     }};
-                    
+
                     // Override Date.getTimezoneOffset
                     const originalGetTimezoneOffset = Date.prototype.getTimezoneOffset;
                     Date.prototype.getTimezoneOffset = function() {{
@@ -263,7 +263,7 @@ class BrowserFingerprinter:
                         }};
                         return timezoneOffsets['{profile["timezone"]}'] || 0;
                     }};
-                    
+
                     // Canvas fingerprint protection with subtle noise
                     const originalToDataURL = HTMLCanvasElement.prototype.toDataURL;
                     HTMLCanvasElement.prototype.toDataURL = function() {{
@@ -281,7 +281,7 @@ class BrowserFingerprinter:
                         }}
                         return originalToDataURL.apply(this, arguments);
                     }};
-                    
+
                     // Audio fingerprint protection
                     if (window.AudioBuffer && AudioBuffer.prototype.getChannelData) {{
                         const originalGetChannelData = AudioBuffer.prototype.getChannelData;
@@ -294,7 +294,7 @@ class BrowserFingerprinter:
                             return originalData;
                         }};
                     }}
-                    
+
                     // Block WebRTC IP leak
                     if (window.RTCPeerConnection) {{
                         const originalRTCPeerConnection = window.RTCPeerConnection;
@@ -307,11 +307,11 @@ class BrowserFingerprinter:
                             return pc;
                         }};
                     }}
-                    
+
                     // Font fingerprint protection
                     const originalOffsetWidth = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetWidth');
                     const originalOffsetHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetHeight');
-                    
+
                     if (originalOffsetWidth) {{
                         Object.defineProperty(HTMLElement.prototype, 'offsetWidth', {{
                             get: function() {{
@@ -321,7 +321,7 @@ class BrowserFingerprinter:
                             }}
                         }});
                     }}
-                    
+
                     if (originalOffsetHeight) {{
                         Object.defineProperty(HTMLElement.prototype, 'offsetHeight', {{
                             get: function() {{
@@ -330,21 +330,21 @@ class BrowserFingerprinter:
                             }}
                         }});
                     }}
-                    
+
                     // Battery API blocking (privacy protection)
                     if ('getBattery' in navigator) {{
                         Object.defineProperty(navigator, 'getBattery', {{
                             get: () => undefined
                         }});
                     }}
-                    
+
                     // GamePad API spoofing
                     if ('getGamepads' in navigator) {{
                         Object.defineProperty(navigator, 'getGamepads', {{
                             get: () => () => []
                         }});
                     }}
-                    
+
                     // MediaDevices fingerprint protection
                     if (navigator.mediaDevices && navigator.mediaDevices.enumerateDevices) {{
                         const originalEnumerateDevices = navigator.mediaDevices.enumerateDevices;
@@ -352,7 +352,7 @@ class BrowserFingerprinter:
                             return Promise.resolve([]);
                         }};
                     }}
-                    
+
                     // Plugins spoofing
                     Object.defineProperty(navigator, 'plugins', {{
                         get: () => {{
@@ -360,7 +360,7 @@ class BrowserFingerprinter:
                             return plugins;
                         }}
                     }});
-                    
+
                     // Connection information spoofing
                     if (navigator.connection) {{
                         Object.defineProperty(navigator.connection, 'effectiveType', {{
@@ -373,7 +373,7 @@ class BrowserFingerprinter:
                             get: () => 50
                         }});
                     }}
-                    
+
                     // Memory information spoofing
                     if ('memory' in performance) {{
                         Object.defineProperty(performance, 'memory', {{
@@ -384,7 +384,7 @@ class BrowserFingerprinter:
                             }})
                         }});
                     }}
-                    
+
                     // Permissions API spoofing
                     if (navigator.permissions && navigator.permissions.query) {{
                         const originalQuery = navigator.permissions.query;
@@ -399,7 +399,7 @@ class BrowserFingerprinter:
                             }});
                         }};
                     }}
-                    
+
                     // Console debug protection
                     const originalLog = console.log;
                     console.log = function() {{
@@ -410,35 +410,35 @@ class BrowserFingerprinter:
                         }}
                         return originalLog.apply(this, arguments);
                     }};
-                    
+
                     // ======================
                     // STEALTH MODE ENHANCEMENTS
                     // ======================
-                    
+
                     // Remove automation indicators
                     delete navigator.__proto__.webdriver;
                     delete navigator.webdriver;
-                    
+
                     // Override chrome runtime
                     if (window.chrome) {{
                         Object.defineProperty(window.chrome, 'runtime', {{
                             get: () => undefined
                         }});
                     }}
-                    
+
                     // Remove automation properties
                     Object.defineProperty(navigator, 'webdriver', {{
                         get: () => undefined
                     }});
-                    
+
                     // Spoof notification permissions
                     Object.defineProperty(window.Notification, 'permission', {{
                         get: () => 'default'
                     }});
-                    
+
                     console.log('🎭 Advanced fingerprinting applied - Profile: {profile.get("os", "Unknown")}');
                 """)
-                
+
                 # Resource filtering with enhanced headers
                 def handler(route):
                     req = route.request
@@ -478,34 +478,34 @@ class BrowserFingerprinter:
                     # Apply smart blocking for non-essential resources
                     if rtype in ('image', 'imageset'):
                         return route.abort()
-                    
+
                     if rtype in ('font', 'media', 'video', 'audio'):
                         return route.abort()
 
                     # Default: continue with headers
                     return route.continue_(headers=headers)
-                
+
                 page.route("**/*", handler)
-                
+
             except Exception as e:
                 # Fallback: continue without advanced fingerprinting
                 print(f"Warning: Advanced fingerprinting failed: {e}")
                 pass
 
         return _enhanced_page_action
-    
+
     def get_user_agent(self) -> str:
         """Get user agent for current profile"""
         return self.current_profile["user_agent"]
-    
+
     def get_viewport(self) -> Dict[str, int]:
         """Get viewport for current profile"""
         return self.current_profile["viewport"]
-    
+
     def get_profile_info(self) -> Dict[str, Any]:
         """Get current profile information"""
         return self.current_profile.copy()
-    
+
     def rotate_profile(self):
         """Rotate to a new random profile"""
         self.current_profile = self._select_profile()
@@ -627,7 +627,7 @@ def _subprocess_fetch(q, url, headless, solve_cloudflare, network_idle, google_s
 
         # Import Scrapling inside child to avoid initializing its loggers in the parent process
         from scrapling.fetchers import StealthyFetcher  # noqa: E402
-        
+
         # Enhanced Cloudflare bypass configuration
         import os
         os.environ['PLAYWRIGHT_CF_AGGRESSIVE'] = '1'  # Enable aggressive mode
@@ -657,11 +657,11 @@ def _subprocess_fetch(q, url, headless, solve_cloudflare, network_idle, google_s
             'page_action': _page_action,  # Always use page_action for auto-scroll
             'geoip': True  # Fix proxy warning - recommended when using proxies
         }
-        
+
         # Add proxy configuration if provided
         if proxy_config:
             fetch_kwargs['proxy'] = proxy_config
-        
+
         page = StealthyFetcher.fetch(**fetch_kwargs)
 
         q.put({
@@ -1034,13 +1034,13 @@ class WebScraper:
         """Enhanced heuristic to detect ACTUAL Cloudflare challenge pages, not just CF presence."""
         if not html:
             return True
-        
+
         # If HTML is substantial (>10KB), likely real content even with CF traces
         if len(html) > 10000:
             return False
-            
+
         low = html.lower()
-        
+
         # Strong challenge indicators (active challenge state)
         strong_indicators = (
             'just a moment', 'verify you are human', 'checking your browser',
@@ -1048,27 +1048,27 @@ class WebScraper:
             'redirecting…', 'redirecting...', 'ddos protection by',
             'browser verification', 'security check', 'loading...', 'challenge-platform'
         )
-        
+
         # Weak indicators (CF presence but could be normal site)
         weak_indicators = (
-            'cf-challenge', 'data-cf', 'turnstile', 'captcha', 'recaptcha', 
+            'cf-challenge', 'data-cf', 'turnstile', 'captcha', 'recaptcha',
             'hcaptcha', 'ray id', 'cf-ray', 'cdn-cgi', 'data-cf-beacon'
         )
-        
+
         # Check for strong indicators first
         strong_matches = sum(1 for k in strong_indicators if k in low)
         if strong_matches >= 1:
             return True
-            
+
         # For weak indicators, need multiple matches AND small HTML
         weak_matches = sum(1 for k in weak_indicators if k in low)
         if weak_matches >= 3 and len(html) < 5000:
             return True
-            
+
         # Special case: "cloudflare" mention with very small HTML
         if 'cloudflare' in low and len(html) < 2000:
             return True
-            
+
         return False
 
     def _is_cloudflare_wait_page(self, url: str, timeout: int = 5) -> bool:
@@ -1157,7 +1157,7 @@ class WebScraper:
                     'Accept-Language': 'en-US,en;q=0.9,id;q=0.8'
                 }
             )
-            resp = urlopen(req, timeout=min(self.timeout, 12))
+            resp = urlopen(req, timeout=min(self.timeout, 8))  # Reduced from 12s → 8s
             content_type = (resp.headers.get('Content-Type') or '').lower()
             if ('text/html' not in content_type) and ('application/xhtml+xml' not in content_type):
                 return None
@@ -1238,7 +1238,7 @@ class WebScraper:
             if 'cloudflare wait page' in error_msg and 'persisted' in error_msg:
                 return {
                     'use_proxy': True,
-                    'timeout': 60,
+                    'timeout': 75,  # Increased from 60s → 75s
                     'reason': 'CF_wait_exceeded',
                     'skip': False
                 }
@@ -1247,7 +1247,7 @@ class WebScraper:
             if 'cloudflare challenge' in error_msg:
                 return {
                     'use_proxy': True,
-                    'timeout': 60,
+                    'timeout': 75,  # Increased from 60s → 75s
                     'reason': 'CF_challenge',
                     'skip': False
                 }
@@ -1258,14 +1258,14 @@ class WebScraper:
                 if elapsed >= 50:  # Long timeout suggests server slowness
                     return {
                         'use_proxy': True,
-                        'timeout': 45,
+                        'timeout': 60,  # No change - 60s is good for slow sites
                         'reason': 'long_timeout',
                         'skip': False
                     }
                 else:
                     return {
                         'use_proxy': True,
-                        'timeout': 30,
+                        'timeout': 30,  # Keep at 30s for quick timeouts (already good)
                         'reason': 'quick_timeout',
                         'skip': False
                     }
@@ -1344,7 +1344,7 @@ class WebScraper:
             if any(pattern in html_lower for pattern in cf_patterns):
                 return {
                     'use_proxy': True,
-                    'timeout': 60,
+                    'timeout': 75,  # Increased from 60s → 75s
                     'reason': 'CF_detected_content',
                     'skip': False
                 }
@@ -1365,7 +1365,7 @@ class WebScraper:
             if any(pattern in html_lower for pattern in antibot_patterns):
                 return {
                     'use_proxy': True,
-                    'timeout': 45,
+                    'timeout': 60,  # Increased from 45s → 60s
                     'reason': 'antibot_detected',
                     'skip': False
                 }
@@ -1383,7 +1383,7 @@ class WebScraper:
         if attempt_result.get('requires_proxy'):
             return {
                 'use_proxy': True,
-                'timeout': 60,
+                'timeout': 75,  # Increased from 60s → 75s
                 'reason': 'explicit_proxy_flag',
                 'skip': False
             }
@@ -1455,12 +1455,13 @@ class WebScraper:
         # This prevents Camoufox crashes from too many concurrent processes
         # Timeout = scraping timeout + 30s buffer (dynamic based on page complexity)
         semaphore_timeout = self.timeout + 30
-        acquired = self.browser_semaphore.acquire(timeout=semaphore_timeout)
-        if not acquired:
-            self.logger.warning(f"Browser semaphore timeout for {url} after {semaphore_timeout}s - increase --workers or reduce concurrent load")
-            return None
-
+        acquired = False
         try:
+            acquired = self.browser_semaphore.acquire(timeout=semaphore_timeout)
+            if not acquired:
+                self.logger.warning(f"Browser semaphore timeout for {url} after {semaphore_timeout}s - increase --workers or reduce concurrent load")
+                return None
+
             result_q = multiprocessing.Queue()
             proc = multiprocessing.Process(
                 target=_subprocess_fetch,
@@ -1508,15 +1509,36 @@ class WebScraper:
             # Ensure child exits cleanly
             try:
                 proc.join(timeout=3)
-                # If process still alive after timeout, force kill it
                 if proc.is_alive():
                     proc.terminate()
                     proc.join(timeout=2)
                     if proc.is_alive():
                         proc.kill()
-                        proc.join(timeout=1)
-            except Exception:
-                pass
+                        proc.join()
+            except (BrokenPipeError, OSError) as e:
+                # EPIPE during shutdown is expected when user presses Ctrl+C
+                import errno
+                if hasattr(e, 'errno') and e.errno == errno.EPIPE:
+                    self.logger.debug(f"⚠️  EPIPE during process cleanup (shutdown): {e}")
+                else:
+                    self.logger.error(f"Process cleanup error: {e}")
+                try:
+                    if proc.is_alive():
+                        proc.kill()
+                        proc.join()
+                except Exception:
+                    pass
+            except Exception as e:
+                try:
+                    self.logger.error(f"Process cleanup error: {e}")
+                except Exception:
+                    pass
+                try:
+                    if proc.is_alive():
+                        proc.kill()
+                        proc.join()
+                except Exception:
+                    pass
             finally:
                 # Clean up queue resources
                 try:
@@ -1542,10 +1564,18 @@ class WebScraper:
                 except Exception:
                     pass
             return None
-
+        except Exception as e:
+            try:
+                self.logger.error(f"Dynamic fetch fatal error: {e}")
+            except Exception:
+                pass
+            return None
         finally:
-            # Always release browser semaphore to prevent deadlock
-            self.browser_semaphore.release()
+            if acquired:
+                try:
+                    self.browser_semaphore.release()
+                except Exception:
+                    pass  # Suppress errors during shutdown
 
     def scrape_url(self, url: str) -> Dict:
         """
@@ -1578,8 +1608,8 @@ class WebScraper:
         }
 
         start_time = time.time()
-        total_budget = 90  # Total time budget per URL
         self.proxy_stats['total_requests'] += 1
+        total_budget = 60  # Default budget (will be overridden after detection)
 
         # Set domain context for Scrapling logs
         _SCRAPLING_CONTEXT.domain = (urlparse(url).netloc or '').lower()
@@ -1673,6 +1703,17 @@ class WebScraper:
             # ===== DETECTION PHASE =====
             detection = self._detect_if_needs_proxy(url, attempt1_result)
 
+            # ===== ADAPTIVE BUDGET CALCULATION =====
+            # Set total_budget based on error type for optimal time allocation
+            if detection['reason'] in ['CF_wait_exceeded', 'CF_challenge', 'CF_detected_content', 'explicit_proxy_flag']:
+                total_budget = 120  # Challenge websites need more time
+            elif detection['reason'] in ['connection_refused', 'dns_error', 'invalid_url']:
+                total_budget = 20   # Dead sites should fail fast
+            else:
+                total_budget = 60   # Normal websites (timeouts, 403, 429, etc)
+
+            self.logger.debug(f"⏱️  Adaptive budget for {detection['reason']}: {total_budget}s")
+
             if detection['skip']:
                 # Fast-fail, don't waste proxy bandwidth
                 result['error'] = f"Skipped: {detection['reason']}"
@@ -1686,7 +1727,16 @@ class WebScraper:
                 return result
 
             # ===== ATTEMPT 2-4: With Proxy (Retry up to 3 times) =====
-            max_retries = 3
+            # Adaptive max_retries based on detection reason
+            if detection['reason'] in ['CF_challenge', 'CF_wait_exceeded', 'CF_detected_content', 'antibot_detected']:
+                max_retries = 2  # Challenge sites: fewer retries, longer timeout per attempt
+            elif detection['reason'] in ['connection_refused', 'dns_error', 'invalid_url']:
+                max_retries = 1  # Dead sites: fail fast (only 1 retry)
+            else:
+                max_retries = 3  # Normal errors: standard retries
+
+            self.logger.debug(f"⏱️  Adaptive max_retries for {detection['reason']}: {max_retries}")
+
             tried_proxies = []
 
             for retry_num in range(max_retries):
@@ -1703,7 +1753,17 @@ class WebScraper:
                     proxy_timeout = int(min(detection['timeout'], remaining))
                     retry_msg = "initial"
                 else:
-                    proxy_timeout = int(min(30, remaining))  # Shorter timeout for retries
+                    # Adaptive retry timeout based on detection reason
+                    if detection['reason'] in ['CF_challenge', 'CF_wait_exceeded', 'CF_detected_content']:
+                        # Challenge sites need more time on retry
+                        base_retry_timeout = 60
+                    elif detection['reason'] in ['antibot_detected']:
+                        base_retry_timeout = 50
+                    else:
+                        # Other errors can use shorter retry timeout
+                        base_retry_timeout = 25
+
+                    proxy_timeout = int(min(base_retry_timeout, remaining))
                     retry_msg = f"retry {retry_num}"
                     self.proxy_stats['proxy_retries'] += 1
 

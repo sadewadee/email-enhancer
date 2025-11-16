@@ -183,7 +183,7 @@ def start_main_for_country(country: str, logger: logging.Logger) -> bool:
         "--output-dir",
         str(DATA_DIR),
         "--workers",
-        "10",  # Jumlah worker untuk main.py
+        "5",  # Jumlah worker untuk main.py
         "--timeout",
         "60",  # Request timeout in seconds
         "--cf-wait-timeout",

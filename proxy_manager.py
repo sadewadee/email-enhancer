@@ -203,10 +203,9 @@ class ProxyManager:
         Returns:
             Proxy configuration dict or None if no other proxies available
         """
-        if not self.proxies:
-            return None
-
         with self.lock:
+            if not self.proxies:
+                return None
             # Filter out both permanently failed and temporarily excluded proxies
             available_proxies = [
                 p for p in self.proxies

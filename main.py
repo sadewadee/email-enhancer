@@ -10,6 +10,7 @@ import sys
 import logging
 import json
 import time
+import signal
 from datetime import datetime
 from typing import Dict, List, Optional, Any
 import traceback
@@ -194,6 +195,22 @@ class EmailScraperValidator:
         Returns:
             Dictionary with processing results
         """
+        # Setup signal handlers for graceful shutdown
+        shutdown_requested = False
+
+        def signal_handler(signum, frame):
+            nonlocal shutdown_requested
+            if shutdown_requested:
+                # Second Ctrl+C - force quit
+                self.logger.warning("❌ Force quit!")
+                sys.exit(1)
+            shutdown_requested = True
+            self.logger.warning("⚠️  Shutdown requested, finishing current tasks...")
+            self.logger.info("💡 Tip: Press Ctrl+C again to force quit")
+
+        signal.signal(signal.SIGINT, signal_handler)
+        signal.signal(signal.SIGTERM, signal_handler)
+
         try:
             # Setup output directory
             if output_dir is None:
@@ -691,7 +708,7 @@ Examples:
                 sys.exit(1)
 
     except KeyboardInterrupt:
-        print("\nProcessing interrupted by user")
+        print("\n❌ Processing forcibly interrupted by user")
         sys.exit(1)
     except Exception as e:
         print(f"Fatal error: {str(e)}")

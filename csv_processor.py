@@ -688,7 +688,10 @@ class CSVProcessor:
                                 # Push to queue for consumer validation and writing
                                 scraped_queue.put(result)
 
-                    producer_executor.shutdown(wait=True)
+                    try:
+                        producer_executor.shutdown(wait=True)
+                    except (BrokenPipeError, OSError):
+                        pass  # Suppress EPIPE during shutdown
 
                     for _ in range(smtp_workers):
                         scraped_queue.put(None)
@@ -707,7 +710,10 @@ class CSVProcessor:
                             break
                         time.sleep(0.1)
 
-                    consumer_executor.shutdown(wait=True)
+                    try:
+                        consumer_executor.shutdown(wait=True)
+                    except (BrokenPipeError, OSError):
+                        pass  # Suppress EPIPE during shutdown
 
                 finally:
                     try:
