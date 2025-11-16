@@ -15,12 +15,87 @@ import csv
 from collections import deque
 import threading
 import queue
+import json
+from datetime import datetime
+from pathlib import Path
 
 from web_scraper import WebScraper
 from contact_extractor import ContactExtractor
 from email_validation import EmailValidator
 from whatsapp_validator import WhatsAppValidator
 
+
+# Completion marker utilities
+def write_completion_marker(csv_path: str, stats: Dict[str, Any], status: str = "complete", error_message: Optional[str] = None) -> None:
+    """
+    Write a completion marker file alongside the processed CSV.
+
+    Args:
+        csv_path: Path to the CSV file
+        stats: Processing statistics dictionary
+        status: Completion status ('complete' or 'partial')
+        error_message: Optional error message if status is 'partial'
+
+    The marker file contains JSON metadata about the processing results.
+    This prevents race conditions where monitor.py reads incomplete CSV files.
+    """
+    try:
+        marker_path = Path(csv_path).with_suffix('.complete')
+
+        # Build marker metadata
+        marker_data = {
+            "status": status,
+            "csv_file": os.path.basename(csv_path),
+            "total_rows": stats.get('processed', 0),
+            "successful_rows": stats.get('successful', 0),
+            "failed_rows": stats.get('failed', 0),
+            "success_rate": stats.get('success_rate', 0),
+            "total_emails": stats.get('total_emails', 0),
+            "total_validated_emails": stats.get('total_validated_emails', 0),
+            "total_phones": stats.get('total_phones', 0),
+            "total_whatsapp": stats.get('total_whatsapp', 0),
+            "processing_rate_per_min": stats.get('processing_per_menit', 0),
+            "created_at": datetime.now().isoformat(),
+            "error_message": error_message
+        }
+
+        # Write atomically: write to temp file first, then rename
+        temp_path = marker_path.with_suffix('.tmp')
+        with open(temp_path, 'w', encoding='utf-8') as f:
+            json.dump(marker_data, f, indent=2)
+
+        # Atomic rename (prevents partial reads)
+        temp_path.rename(marker_path)
+
+        logging.getLogger(__name__).info(
+            f"✓ Completion marker written: {marker_path.name} "
+            f"(status={status}, rows={stats.get('processed', 0)})"
+        )
+    except Exception as e:
+        # Marker write failure should NOT crash the main process
+        logging.getLogger(__name__).warning(f"Failed to write completion marker for {csv_path}: {e}")
+
+
+def read_completion_marker(csv_path: str) -> Optional[Dict[str, Any]]:
+    """
+    Read completion marker metadata.
+
+    Args:
+        csv_path: Path to the CSV file
+
+    Returns:
+        Marker metadata dict or None if marker doesn't exist
+    """
+    try:
+        marker_path = Path(csv_path).with_suffix('.complete')
+        if not marker_path.exists():
+            return None
+
+        with open(marker_path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception as e:
+        logging.getLogger(__name__).warning(f"Failed to read completion marker for {csv_path}: {e}")
+        return None
 
 
 # Enhanced processing rate calculator - imports already exist above
@@ -122,12 +197,12 @@ class CSVProcessor:
     Handles parallel processing of CSV files containing URLs for contact extraction.
     """
 
-    def __init__(self, max_workers: int = 10, timeout: int = 30, block_images: bool = False, disable_resources: bool = False, network_idle: bool = True, cf_wait_timeout: int = 60, skip_on_challenge: bool = False, proxy_file: str = "proxy.txt"):
+    def __init__(self, max_workers: int = 5, timeout: int = 30, block_images: bool = False, disable_resources: bool = False, network_idle: bool = True, cf_wait_timeout: int = 60, skip_on_challenge: bool = False, proxy_file: str = "proxy.txt", max_concurrent_browsers: int = None):
         """
         Initialize CSV processor.
 
         Args:
-            max_workers: Maximum number of concurrent threads
+            max_workers: Maximum number of concurrent threads (reduced to 5 for stability)
             timeout: Timeout for web scraping requests
             block_images: Block image loading to reduce bandwidth
             disable_resources: Disable fonts/media/other non-essential resources
@@ -135,10 +210,26 @@ class CSVProcessor:
             cf_wait_timeout: Per-URL maximum wait for Cloudflare challenge (seconds)
             skip_on_challenge: Skip immediately when Cloudflare challenge detected
             proxy_file: Path to proxy file for automatic proxy detection
+            max_concurrent_browsers: Maximum concurrent browser instances (defaults to max_workers)
         """
         self.max_workers = max_workers
         self.timeout = timeout
-        self.scraper = WebScraper(timeout=timeout, block_images=block_images, disable_resources=disable_resources, network_idle=network_idle, cf_wait_timeout=cf_wait_timeout, skip_on_challenge=skip_on_challenge, proxy_file=proxy_file, static_first=False)
+
+        # Auto-set max_concurrent_browsers to match max_workers if not specified
+        if max_concurrent_browsers is None:
+            max_concurrent_browsers = max_workers
+
+        self.scraper = WebScraper(
+            timeout=timeout,
+            block_images=block_images,
+            disable_resources=disable_resources,
+            network_idle=network_idle,
+            cf_wait_timeout=cf_wait_timeout,
+            skip_on_challenge=skip_on_challenge,
+            proxy_file=proxy_file,
+            static_first=False,
+            max_concurrent_browsers=max_concurrent_browsers
+        )
         self.extractor = ContactExtractor()
         self.validator = EmailValidator(
             use_third_party=True,
@@ -367,8 +458,8 @@ class CSVProcessor:
                 writer_lock = threading.Lock()
                 progress_lock = threading.Lock()
 
-                # Validation workers: 70% of scraping workers (validation is slower process)
-                smtp_workers = max(3, int(self.max_workers * 0.7))
+                # Validation workers: 150% of scraping workers for faster queue processing
+                smtp_workers = max(3, int(self.max_workers * 1.5))
 
                 # Queue size: 2x total workers for adequate buffering
                 queue_size = (self.max_workers + smtp_workers) * 2
@@ -656,10 +747,30 @@ class CSVProcessor:
             }
 
             self.logger.info(f"✅ Completed! Success rate: {stats['success_rate']:.1f}% ({success_count}/{processed_count})")
+
+            # Write completion marker (success case)
+            write_completion_marker(output_file, stats, status="complete")
+
             return stats
 
         except Exception as e:
             self.logger.error(f"Error processing CSV file: {str(e)}")
+
+            # Write partial completion marker (error case)
+            # This allows monitor to upload partial data if acceptable
+            partial_stats = {
+                'processed': processed_count if 'processed_count' in locals() else 0,
+                'successful': success_count if 'success_count' in locals() else 0,
+                'failed': 0,
+                'success_rate': 0,
+                'total_emails': total_emails if 'total_emails' in locals() else 0,
+                'total_validated_emails': total_validated_emails if 'total_validated_emails' in locals() else 0,
+                'total_phones': total_phones if 'total_phones' in locals() else 0,
+                'total_whatsapp': total_whatsapp if 'total_whatsapp' in locals() else 0,
+                'processing_per_menit': per_menit if 'per_menit' in locals() else 0
+            }
+            write_completion_marker(output_file, partial_stats, status="partial", error_message=str(e))
+
             raise
 
     def _save_results_to_csv(self, results: List[Dict], original_df: pd.DataFrame, output_file: str):

@@ -287,6 +287,9 @@ class PostProcessor:
         Remove duplicate rows based on specified columns.
         Smart deduplication: Only removes rows when business name AND address are the same.
 
+        ⚠️ CURRENTLY DISABLED - This method was removing too much data
+        Now it just copies the input to output without deduplication.
+
         Args:
             input_file: Path to input CSV file
             output_file: Path to output CSV file
@@ -299,6 +302,27 @@ class PostProcessor:
             # Read input CSV
             df = pd.read_csv(input_file)
             original_count = len(df)
+
+            # ⚠️ DEDUPLICATION DISABLED - Just copy all data without removing duplicates
+            self.logger.warning("⚠️  DEDUPLICATION DISABLED - Copying all data without removing duplicates")
+
+            # Save all data without deduplication
+            os.makedirs(os.path.dirname(output_file), exist_ok=True)
+            df.to_csv(output_file, index=False)
+
+            stats = {
+                'original_rows': original_count,
+                'deduplicated_rows': original_count,
+                'duplicates_removed': 0,
+                'dedup_columns': [],
+                'status': 'DISABLED - No deduplication performed'
+            }
+
+            self.logger.info(f"✅ Copied {original_count} rows without deduplication")
+            return stats
+
+            # === OLD DEDUPLICATION LOGIC (DISABLED) ===
+            # The code below is kept for reference but will never execute
 
             # Smart deduplication: Auto-detect columns
             if dedup_columns is None:
@@ -356,72 +380,187 @@ class PostProcessor:
         except Exception as e:
             self.logger.error(f"Error deduplicating contacts: {str(e)}")
             raise
-    
-    def generate_summary_report(self, 
-                              input_file: str, 
+
+    def generate_summary_report(self,
+                              input_file: str,
                               output_file: str) -> Dict[str, Any]:
         """
         Generate a summary report of the processing results.
-        
+
         Args:
             input_file: Path to processed CSV file
             output_file: Path to summary report file
-            
+
         Returns:
             Dictionary with summary statistics
         """
         try:
             # Read processed data
             df = pd.read_csv(input_file)
-            
-            # Calculate statistics
+
+            # Calculate statistics with safe column access
             stats = {
                 'total_records': len(df),
-                'successful_scrapes': len(df[df['scraping_status'] == 'success']),
-                'failed_scrapes': len(df[df['scraping_status'] == 'failed']),
-                'records_with_emails': len(df[df['emails_found'] > 0]),
-                'records_with_phones': len(df[df['phones_found'] > 0]),
-                'records_with_whatsapp': len(df[df['whatsapp_found'] > 0]),
-                'records_with_validated_emails': len(df[df['validated_emails_count'] > 0]),
-                'total_emails_found': df['emails_found'].sum(),
-                'total_phones_found': df['phones_found'].sum(),
-                'total_whatsapp_found': df['whatsapp_found'].sum(),
-                'total_validated_emails': df['validated_emails_count'].sum(),
-                'average_processing_time': df['processing_time'].mean(),
-                'success_rate': (len(df[df['scraping_status'] == 'success']) / len(df) * 100) if len(df) > 0 else 0
+                'successful_scrapes': len(df[df['scraping_status'] == 'success']) if 'scraping_status' in df.columns else 0,
+                'failed_scrapes': len(df[df['scraping_status'] == 'failed']) if 'scraping_status' in df.columns else 0,
+                'records_with_emails': len(df[df['emails_found'] > 0]) if 'emails_found' in df.columns else 0,
+                'records_with_phones': len(df[df['phones_found'] > 0]) if 'phones_found' in df.columns else 0,
+                'records_with_whatsapp': len(df[df['whatsapp_found'] > 0]) if 'whatsapp_found' in df.columns else 0,
+                'records_with_validated_emails': len(df[df['validated_emails_count'] > 0]) if 'validated_emails_count' in df.columns else 0,
+                'total_emails_found': int(df['emails_found'].sum()) if 'emails_found' in df.columns else 0,
+                'total_phones_found': int(df['phones_found'].sum()) if 'phones_found' in df.columns else 0,
+                'total_whatsapp_found': int(df['whatsapp_found'].sum()) if 'whatsapp_found' in df.columns else 0,
+                'total_validated_emails': int(df['validated_emails_count'].sum()) if 'validated_emails_count' in df.columns else 0,
+                'average_processing_time': float(df['processing_time'].mean()) if 'processing_time' in df.columns else 0.0,
+                'success_rate': (len(df[df['scraping_status'] == 'success']) / len(df) * 100) if len(df) > 0 and 'scraping_status' in df.columns else 0
             }
-            
+
             # Generate report content
             report_content = self._generate_report_content(stats, df)
-            
+
             # Save report
             os.makedirs(os.path.dirname(output_file), exist_ok=True)
             with open(output_file, 'w', encoding='utf-8') as f:
                 f.write(report_content)
-            
+
             # Also save as JSON
             json_file = output_file.replace('.txt', '.json')
             with open(json_file, 'w', encoding='utf-8') as f:
                 json.dump(stats, f, indent=2, default=str)
-            
+
             self.logger.info(f"📈 Report generated: {os.path.basename(output_file)}")
             return stats
-            
+
         except Exception as e:
             self.logger.error(f"Error generating summary report: {str(e)}")
             raise
-    
+
+    def generate_raw_data_report(self,
+                                 input_file: str,
+                                 output_file: str) -> Dict[str, Any]:
+        """
+        Generate a summary report for raw scraper output data.
+        Expected columns: scraping_status, emails_found, phones_found, etc.
+
+        Args:
+            input_file: Path to raw scraper output CSV file
+            output_file: Path to summary report file
+
+        Returns:
+            Dictionary with summary statistics
+        """
+        try:
+            # Read processed data
+            df = pd.read_csv(input_file)
+
+            # Calculate statistics with safe column access
+            stats = {
+                'total_records': len(df),
+                'successful_scrapes': len(df[df['scraping_status'] == 'success']) if 'scraping_status' in df.columns else 0,
+                'failed_scrapes': len(df[df['scraping_status'] == 'failed']) if 'scraping_status' in df.columns else 0,
+                'records_with_emails': len(df[df['emails_found'] > 0]) if 'emails_found' in df.columns else 0,
+                'records_with_phones': len(df[df['phones_found'] > 0]) if 'phones_found' in df.columns else 0,
+                'records_with_whatsapp': len(df[df['whatsapp_found'] > 0]) if 'whatsapp_found' in df.columns else 0,
+                'records_with_validated_emails': len(df[df['validated_emails_count'] > 0]) if 'validated_emails_count' in df.columns else 0,
+                'total_emails_found': int(df['emails_found'].sum()) if 'emails_found' in df.columns else 0,
+                'total_phones_found': int(df['phones_found'].sum()) if 'phones_found' in df.columns else 0,
+                'total_whatsapp_found': int(df['whatsapp_found'].sum()) if 'whatsapp_found' in df.columns else 0,
+                'total_validated_emails': int(df['validated_emails_count'].sum()) if 'validated_emails_count' in df.columns else 0,
+                'average_processing_time': float(df['processing_time'].mean()) if 'processing_time' in df.columns else 0.0,
+                'success_rate': (len(df[df['scraping_status'] == 'success']) / len(df) * 100) if len(df) > 0 and 'scraping_status' in df.columns else 0
+            }
+
+            # Generate report content
+            report_content = self._generate_raw_report_content(stats, df)
+
+            # Save report
+            os.makedirs(os.path.dirname(output_file), exist_ok=True)
+            with open(output_file, 'w', encoding='utf-8') as f:
+                f.write(report_content)
+
+            # Also save as JSON
+            json_file = output_file.replace('.txt', '.json')
+            with open(json_file, 'w', encoding='utf-8') as f:
+                json.dump(stats, f, indent=2, default=str)
+
+            self.logger.info(f"📈 Raw data report generated: {os.path.basename(output_file)}")
+            return stats
+
+        except Exception as e:
+            self.logger.error(f"Error generating raw data report: {str(e)}")
+            raise
+
+    def generate_wide_form_report(self,
+                                  input_file: str,
+                                  output_file: str) -> Dict[str, Any]:
+        """
+        Generate a summary report for wide-form processed data.
+        Expected columns: total_emails_extracted, total_phones_extracted, etc.
+
+        Args:
+            input_file: Path to wide-form processed CSV file
+            output_file: Path to summary report file
+
+        Returns:
+            Dictionary with summary statistics
+        """
+        try:
+            # Read processed data
+            df = pd.read_csv(input_file)
+
+            # Calculate statistics from wide-form columns
+            stats = {
+                'total_records': len(df),
+                'records_with_contacts': len(df[df['has_contacts'] == True]) if 'has_contacts' in df.columns else 0,
+                'records_with_emails': len(df[df['total_emails_extracted'] > 0]) if 'total_emails_extracted' in df.columns else 0,
+                'records_with_phones': len(df[df['total_phones_extracted'] > 0]) if 'total_phones_extracted' in df.columns else 0,
+                'records_with_whatsapp': len(df[df['total_whatsapp_extracted'] > 0]) if 'total_whatsapp_extracted' in df.columns else 0,
+                'records_with_validated_emails': len(df[df['total_validated_emails'] > 0]) if 'total_validated_emails' in df.columns else 0,
+                'total_emails_extracted': int(df['total_emails_extracted'].sum()) if 'total_emails_extracted' in df.columns else 0,
+                'total_phones_extracted': int(df['total_phones_extracted'].sum()) if 'total_phones_extracted' in df.columns else 0,
+                'total_whatsapp_extracted': int(df['total_whatsapp_extracted'].sum()) if 'total_whatsapp_extracted' in df.columns else 0,
+                'total_validated_emails': int(df['total_validated_emails'].sum()) if 'total_validated_emails' in df.columns else 0,
+                'contact_success_rate': (len(df[df['has_contacts'] == True]) / len(df) * 100) if len(df) > 0 and 'has_contacts' in df.columns else 0,
+                'validation_success_rate': (len(df[df['has_valid_emails'] == True]) / len(df) * 100) if len(df) > 0 and 'has_valid_emails' in df.columns else 0
+            }
+
+            # Generate report content
+            report_content = self._generate_wide_form_report_content(stats, df)
+
+            # Save report
+            os.makedirs(os.path.dirname(output_file), exist_ok=True)
+            with open(output_file, 'w', encoding='utf-8') as f:
+                f.write(report_content)
+
+            # Also save as JSON
+            json_file = output_file.replace('.txt', '.json')
+            with open(json_file, 'w', encoding='utf-8') as f:
+                json.dump(stats, f, indent=2, default=str)
+
+            self.logger.info(f"📈 Wide-form report generated: {os.path.basename(output_file)}")
+            return stats
+
+        except Exception as e:
+            self.logger.error(f"Error generating wide-form report: {str(e)}")
+            raise
+
     def _generate_report_content(self, stats: Dict[str, Any], df: pd.DataFrame) -> str:
         """
         Generate formatted report content.
-        
+
         Args:
             stats: Statistics dictionary
             df: Processed DataFrame
-            
+
         Returns:
             Formatted report string
         """
+        # Safe division helper
+        def safe_div(a, b, default=0.0):
+            return (a / b) if b > 0 else default
+
+        total = stats['total_records']
+
         report = f"""
 EMAIL SCRAPER & VALIDATOR - PROCESSING REPORT
 ============================================
@@ -438,10 +577,10 @@ Average Processing Time: {stats['average_processing_time']:.2f} seconds
 
 CONTACT EXTRACTION RESULTS
 --------------------------
-Records with Emails: {stats['records_with_emails']:,} ({stats['records_with_emails']/stats['total_records']*100:.1f}%)
-Records with Phone Numbers: {stats['records_with_phones']:,} ({stats['records_with_phones']/stats['total_records']*100:.1f}%)
-Records with WhatsApp: {stats['records_with_whatsapp']:,} ({stats['records_with_whatsapp']/stats['total_records']*100:.1f}%)
-Records with Validated Emails: {stats['records_with_validated_emails']:,} ({stats['records_with_validated_emails']/stats['total_records']*100:.1f}%)
+Records with Emails: {stats['records_with_emails']:,} ({safe_div(stats['records_with_emails'], total, 0)*100:.1f}%)
+Records with Phone Numbers: {stats['records_with_phones']:,} ({safe_div(stats['records_with_phones'], total, 0)*100:.1f}%)
+Records with WhatsApp: {stats['records_with_whatsapp']:,} ({safe_div(stats['records_with_whatsapp'], total, 0)*100:.1f}%)
+Records with Validated Emails: {stats['records_with_validated_emails']:,} ({safe_div(stats['records_with_validated_emails'], total, 0)*100:.1f}%)
 
 TOTAL CONTACTS FOUND
 -------------------
@@ -452,40 +591,178 @@ Total Validated Emails: {stats['total_validated_emails']:,}
 
 PERFORMANCE METRICS
 ------------------
-Average Emails per Successful Record: {stats['total_emails_found']/stats['successful_scrapes']:.1f}
-Average Phones per Successful Record: {stats['total_phones_found']/stats['successful_scrapes']:.1f}
-Email Validation Rate: {stats['total_validated_emails']/stats['total_emails_found']*100:.1f}%
+Average Emails per Successful Record: {safe_div(stats['total_emails_found'], stats['successful_scrapes'], 0):.1f}
+Average Phones per Successful Record: {safe_div(stats['total_phones_found'], stats['successful_scrapes'], 0):.1f}
+Email Validation Rate: {safe_div(stats['total_validated_emails'], stats['total_emails_found'], 0)*100:.1f}%
 
 TOP ERROR TYPES
 --------------
 """
-        
+
         # Add error analysis if available
         if 'scraping_error' in df.columns:
-            error_counts = df[df['scraping_error'] != '']['scraping_error'].value_counts().head(5)
-            for error, count in error_counts.items():
-                report += f"{error}: {count} occurrences\n"
-        
+            error_counts = df[df['scraping_error'].notna() & (df['scraping_error'] != '')]['scraping_error'].value_counts().head(5)
+            if len(error_counts) > 0:
+                for error, count in error_counts.items():
+                    report += f"{error}: {count} occurrences\n"
+
+        return report
+
+    def _generate_raw_report_content(self, stats: Dict[str, Any], df: pd.DataFrame) -> str:
+        """
+        Generate formatted report content for raw scraper data.
+
+        Args:
+            stats: Statistics dictionary
+            df: Raw scraper DataFrame
+
+        Returns:
+            Formatted report string
+        """
+        # Safe division helper
+        def safe_div(a, b, default=0.0):
+            return (a / b) if b > 0 else default
+
+        # Safe percentage
+        total = stats['total_records']
+
+        report = f"""
+EMAIL SCRAPER & VALIDATOR - RAW DATA REPORT
+===========================================
+
+Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+OVERVIEW
+--------
+Total Records Processed: {stats['total_records']:,}
+Successful Scrapes: {stats['successful_scrapes']:,}
+Failed Scrapes: {stats['failed_scrapes']:,}
+Success Rate: {stats['success_rate']:.1f}%
+Average Processing Time: {stats['average_processing_time']:.2f} seconds
+
+CONTACT EXTRACTION RESULTS
+--------------------------
+Records with Emails: {stats['records_with_emails']:,} ({safe_div(stats['records_with_emails'], total, 0)*100:.1f}%)
+Records with Phone Numbers: {stats['records_with_phones']:,} ({safe_div(stats['records_with_phones'], total, 0)*100:.1f}%)
+Records with WhatsApp: {stats['records_with_whatsapp']:,} ({safe_div(stats['records_with_whatsapp'], total, 0)*100:.1f}%)
+Records with Validated Emails: {stats['records_with_validated_emails']:,} ({safe_div(stats['records_with_validated_emails'], total, 0)*100:.1f}%)
+
+TOTAL CONTACTS FOUND
+-------------------
+Total Emails: {stats['total_emails_found']:,}
+Total Phone Numbers: {stats['total_phones_found']:,}
+Total WhatsApp Contacts: {stats['total_whatsapp_found']:,}
+Total Validated Emails: {stats['total_validated_emails']:,}
+
+PERFORMANCE METRICS
+------------------
+Average Emails per Successful Record: {safe_div(stats['total_emails_found'], stats['successful_scrapes'], 0):.1f}
+Average Phones per Successful Record: {safe_div(stats['total_phones_found'], stats['successful_scrapes'], 0):.1f}
+Email Validation Rate: {safe_div(stats['total_validated_emails'], stats['total_emails_found'], 0)*100:.1f}%
+
+TOP ERROR TYPES
+--------------
+"""
+
+        # Add error analysis if available
+        if 'scraping_error' in df.columns:
+            error_counts = df[df['scraping_error'].notna() & (df['scraping_error'] != '')]['scraping_error'].value_counts().head(5)
+            if len(error_counts) > 0:
+                for error, count in error_counts.items():
+                    report += f"{error}: {count} occurrences\n"
+            else:
+                report += "No errors recorded\n"
+        else:
+            report += "Error tracking not available\n"
+
+        return report
+
+    def _generate_wide_form_report_content(self, stats: Dict[str, Any], df: pd.DataFrame) -> str:
+        """
+        Generate formatted report content for wide-form processed data.
+
+        Args:
+            stats: Statistics dictionary
+            df: Wide-form processed DataFrame
+
+        Returns:
+            Formatted report string
+        """
+        # Safe division helper
+        def safe_div(a, b, default=0.0):
+            return (a / b) if b > 0 else default
+
+        # Safe percentage
+        total = stats['total_records']
+
+        report = f"""
+EMAIL SCRAPER & VALIDATOR - WIDE-FORM PROCESSING REPORT
+=======================================================
+
+Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+OVERVIEW
+--------
+Total Records: {stats['total_records']:,}
+Records with Contacts: {stats['records_with_contacts']:,}
+Contact Success Rate: {stats['contact_success_rate']:.1f}%
+Validation Success Rate: {stats['validation_success_rate']:.1f}%
+
+CONTACT EXTRACTION RESULTS
+--------------------------
+Records with Emails: {stats['records_with_emails']:,} ({safe_div(stats['records_with_emails'], total, 0)*100:.1f}%)
+Records with Phone Numbers: {stats['records_with_phones']:,} ({safe_div(stats['records_with_phones'], total, 0)*100:.1f}%)
+Records with WhatsApp: {stats['records_with_whatsapp']:,} ({safe_div(stats['records_with_whatsapp'], total, 0)*100:.1f}%)
+Records with Validated Emails: {stats['records_with_validated_emails']:,} ({safe_div(stats['records_with_validated_emails'], total, 0)*100:.1f}%)
+
+TOTAL CONTACTS EXTRACTED
+------------------------
+Total Emails: {stats['total_emails_extracted']:,}
+Total Phone Numbers: {stats['total_phones_extracted']:,}
+Total WhatsApp Contacts: {stats['total_whatsapp_extracted']:,}
+Total Validated Emails: {stats['total_validated_emails']:,}
+
+PERFORMANCE METRICS
+------------------
+Average Emails per Record: {safe_div(stats['total_emails_extracted'], stats['records_with_emails'], 0):.1f}
+Average Phones per Record: {safe_div(stats['total_phones_extracted'], stats['records_with_phones'], 0):.1f}
+Average WhatsApp per Record: {safe_div(stats['total_whatsapp_extracted'], stats['records_with_whatsapp'], 0):.1f}
+Email Validation Rate: {safe_div(stats['total_validated_emails'], stats['total_emails_extracted'], 0)*100:.1f}%
+
+DATA QUALITY
+-----------
+Records with No Contacts: {total - stats['records_with_contacts']:,} ({safe_div(total - stats['records_with_contacts'], total, 0)*100:.1f}%)
+Records with Valid Emails: {stats['records_with_validated_emails']:,} ({safe_div(stats['records_with_validated_emails'], total, 0)*100:.1f}%)
+"""
+
         return report
 
 
 if __name__ == "__main__":
     # Example usage
     processor = PostProcessor()
-    
-    # Create wide-form output
-    stats = processor.create_wide_form_output(
-        input_file="processed_results.csv",
+
+    # Example 1: Generate report for raw scraper output
+    print("Example 1: Raw data report")
+    raw_stats = processor.generate_raw_data_report(
+        input_file="raw_scraper_output.csv",
+        output_file="raw_data_report.txt"
+    )
+    print(f"Raw data report generated with {raw_stats['success_rate']:.1f}% success rate")
+
+    # Example 2: Create wide-form output
+    print("\nExample 2: Wide-form conversion")
+    wide_stats = processor.create_wide_form_output(
+        input_file="raw_scraper_output.csv",
         output_file="wide_form_results.csv",
-        max_contacts_per_type=5
+        max_contacts_per_type=10
     )
-    
-    print(f"Wide-form conversion completed: {stats['output_columns']} columns created")
-    
-    # Generate summary report
-    report_stats = processor.generate_summary_report(
-        input_file="processed_results.csv",
-        output_file="processing_report.txt"
+    print(f"Wide-form conversion completed: {wide_stats['output_columns']} columns created")
+
+    # Example 3: Generate report for wide-form data
+    print("\nExample 3: Wide-form report")
+    report_stats = processor.generate_wide_form_report(
+        input_file="wide_form_results.csv",
+        output_file="wide_form_report.txt"
     )
-    
-    print(f"Summary report generated with {report_stats['success_rate']:.1f}% success rate")
+    print(f"Wide-form report generated: {report_stats['contact_success_rate']:.1f}% contact success rate")

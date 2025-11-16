@@ -696,7 +696,8 @@ class WebScraper:
                  static_first: bool = True,
                  cf_wait_timeout: int = 60,
                  skip_on_challenge: bool = False,
-                 proxy_file: str = "proxy.txt"):
+                 proxy_file: str = "proxy.txt",
+                 max_concurrent_browsers: int = 3):
         """
         Initialize the web scraper.
 
@@ -711,6 +712,7 @@ class WebScraper:
             cf_wait_timeout (int): Cloudflare challenge timeout
             skip_on_challenge (bool): Skip URLs with detected challenges
             proxy_file (str): Path to proxy file (default: proxy.txt)
+            max_concurrent_browsers (int): Maximum concurrent browser instances to prevent crashes
         """
         self.headless = headless
         self.solve_cloudflare = solve_cloudflare
@@ -723,17 +725,37 @@ class WebScraper:
         self.cf_wait_timeout = cf_wait_timeout
         # If True, skip early when a Cloudflare challenge is detected
         self.skip_on_challenge = skip_on_challenge
-        
+
         # Initialize proxy manager
         self.proxy_manager = ProxyManager(proxy_file)
-        
+
         # Initialize advanced browser fingerprinting
         self.fingerprinter = BrowserFingerprinter(profile_type="random")
-        
+
+        # Browser subprocess management - Limit concurrent instances to prevent crashes
+        self.max_concurrent_browsers = max_concurrent_browsers
+        self.browser_semaphore = threading.Semaphore(max_concurrent_browsers)
+
+        # Proxy usage statistics tracking
+        self.proxy_stats = {
+            'total_requests': 0,
+            'proxy_avoided': 0,
+            'proxy_used': 0,
+            'proxy_justified': 0,
+            'proxy_wasted': 0,
+            'proxy_retries': 0,
+            'time_saved_seconds': 0.0,
+            'direct_success': 0,
+            'direct_failed': 0,
+            'proxy_success': 0,
+            'proxy_failed': 0
+        }
+
         # Log proxy status
         if self.proxy_manager.has_proxies():
             self.logger = logging.getLogger(__name__)
             self.logger.info(f"🔄 Proxy support enabled: {self.proxy_manager.get_proxy_count()} proxies loaded")
+            self.logger.info(f"🎯 Smart proxy mode active | Max concurrent browsers: {max_concurrent_browsers}")
         else:
             self.logger = logging.getLogger(__name__)
             self.logger.info("📡 No proxy file detected - running in direct mode")
@@ -1191,105 +1213,350 @@ class WebScraper:
         except Exception:
             return None
 
-    def _fetch_with_timeout(self, url: str, timeout: int, google_search: bool, network_idle: bool):
+    def _detect_if_needs_proxy(self, url: str, attempt_result: Dict) -> Dict:
+        """
+        Detect if proxy is needed based on first attempt result.
+        Smart detection to avoid wasting proxy bandwidth on sites that don't need it.
+
+        Args:
+            url: Target URL
+            attempt_result: Result from first attempt (direct, no proxy)
+
+        Returns:
+            {
+                'use_proxy': bool,
+                'timeout': int,
+                'reason': str,
+                'skip': bool
+            }
+        """
+        # CATEGORY 1: Fast-fail scenarios based on error messages
+        if attempt_result.get('error'):
+            error_msg = str(attempt_result['error']).lower()
+
+            # Cloudflare wait page detected and persisted
+            if 'cloudflare wait page' in error_msg and 'persisted' in error_msg:
+                return {
+                    'use_proxy': True,
+                    'timeout': 60,
+                    'reason': 'CF_wait_exceeded',
+                    'skip': False
+                }
+
+            # Cloudflare challenge detected
+            if 'cloudflare challenge' in error_msg:
+                return {
+                    'use_proxy': True,
+                    'timeout': 60,
+                    'reason': 'CF_challenge',
+                    'skip': False
+                }
+
+            # Generic timeout without CF signature - try proxy with shorter timeout
+            if 'timeout' in error_msg and 'cloudflare' not in error_msg:
+                elapsed = attempt_result.get('load_time', 0)
+                if elapsed >= 50:  # Long timeout suggests server slowness
+                    return {
+                        'use_proxy': True,
+                        'timeout': 45,
+                        'reason': 'long_timeout',
+                        'skip': False
+                    }
+                else:
+                    return {
+                        'use_proxy': True,
+                        'timeout': 30,
+                        'reason': 'quick_timeout',
+                        'skip': False
+                    }
+
+            # Dynamic fetch timeout
+            if 'dynamic_fetch_timeout' in error_msg:
+                return {
+                    'use_proxy': True,
+                    'timeout': 45,
+                    'reason': 'dynamic_timeout',
+                    'skip': False
+                }
+
+        # CATEGORY 2: Status code analysis
+        status = attempt_result.get('status', 0)
+
+        if status == 403:
+            return {
+                'use_proxy': True,
+                'timeout': 30,
+                'reason': 'forbidden_403',
+                'skip': False
+            }
+
+        if status == 429:
+            return {
+                'use_proxy': True,
+                'timeout': 30,
+                'reason': 'rate_limited_429',
+                'skip': False
+            }
+
+        if status == 503:
+            return {
+                'use_proxy': True,
+                'timeout': 45,
+                'reason': 'service_unavailable_503',
+                'skip': False
+            }
+
+        if status == 408:  # Request timeout
+            elapsed = attempt_result.get('load_time', 0)
+            if elapsed >= 60:
+                return {
+                    'use_proxy': True,
+                    'timeout': 60,
+                    'reason': 'timeout_408_long',
+                    'skip': False
+                }
+            else:
+                return {
+                    'use_proxy': True,
+                    'timeout': 30,
+                    'reason': 'timeout_408_quick',
+                    'skip': False
+                }
+
+        # CATEGORY 3: Content analysis (if HTML available)
+        html = attempt_result.get('html', '')
+        if html:
+            html_lower = html.lower()
+
+            # Cloudflare signatures
+            cf_patterns = [
+                'cloudflare',
+                'cf-ray',
+                'cf_chl_',
+                'challenge-platform',
+                'turnstile',
+                'checking your browser',
+                '__cf_bm',
+                'cf-browser-verification',
+                'cdn-cgi/challenge'
+            ]
+
+            if any(pattern in html_lower for pattern in cf_patterns):
+                return {
+                    'use_proxy': True,
+                    'timeout': 60,
+                    'reason': 'CF_detected_content',
+                    'skip': False
+                }
+
+            # Other anti-bot services
+            antibot_patterns = [
+                'recaptcha',
+                'hcaptcha',
+                'distil_r_captcha',
+                'perimeterx',
+                'px-captcha',
+                'you have been blocked',
+                'access denied',
+                'rate limit exceeded',
+                'datadome'
+            ]
+
+            if any(pattern in html_lower for pattern in antibot_patterns):
+                return {
+                    'use_proxy': True,
+                    'timeout': 45,
+                    'reason': 'antibot_detected',
+                    'skip': False
+                }
+
+            # Suspiciously small HTML (likely challenge page)
+            if len(html) < 200:
+                return {
+                    'use_proxy': True,
+                    'timeout': 30,
+                    'reason': 'small_html',
+                    'skip': False
+                }
+
+        # CATEGORY 4: Check if marked as requiring proxy
+        if attempt_result.get('requires_proxy'):
+            return {
+                'use_proxy': True,
+                'timeout': 60,
+                'reason': 'explicit_proxy_flag',
+                'skip': False
+            }
+
+        # Default: No clear signal that proxy is needed
+        return {
+            'use_proxy': False,
+            'timeout': 0,
+            'reason': 'no_proxy_needed',
+            'skip': False
+        }
+
+    def get_proxy_efficiency_report(self) -> Dict:
+        """
+        Get proxy usage efficiency metrics.
+
+        Returns:
+            Dictionary with efficiency statistics
+        """
+        total = self.proxy_stats['total_requests']
+        if total == 0:
+            return {
+                'total_requests': 0,
+                'proxy_avoidance_rate': 0.0,
+                'proxy_success_rate': 0.0,
+                'bandwidth_efficiency': 0.0,
+                'time_saved_seconds': 0.0
+            }
+
+        proxy_used = self.proxy_stats['proxy_used']
+        proxy_justified = self.proxy_stats['proxy_justified']
+
+        return {
+            'total_requests': total,
+            'proxy_avoided': self.proxy_stats['proxy_avoided'],
+            'proxy_used': proxy_used,
+            'proxy_avoidance_rate': (self.proxy_stats['proxy_avoided'] / total) * 100,
+            'proxy_success_rate': (proxy_justified / proxy_used * 100) if proxy_used > 0 else 0.0,
+            'bandwidth_efficiency': (self.proxy_stats['proxy_avoided'] / total) * 100,
+            'direct_success': self.proxy_stats['direct_success'],
+            'direct_failed': self.proxy_stats['direct_failed'],
+            'proxy_success': self.proxy_stats['proxy_success'],
+            'proxy_failed': self.proxy_stats['proxy_failed'],
+            'proxy_retries': self.proxy_stats['proxy_retries'],
+            'time_saved_seconds': self.proxy_stats['time_saved_seconds']
+        }
+
+    def _fetch_with_timeout(self, url: str, timeout: int, google_search: bool, network_idle: bool, use_proxy: bool = True):
         """
         Perform StealthyFetcher.fetch in an isolated subprocess with a hard wall-clock timeout.
         Returns a SimpleNamespace page-like object on success, or None on timeout/error.
         This prevents indefinite blocking on Cloudflare wait pages and silences child logs.
+
+        Args:
+            url: Target URL
+            timeout: Timeout in seconds
+            google_search: Whether to use Google search mode
+            network_idle: Wait for network idle
+            use_proxy: Whether to use proxy (smart proxy mode)
         """
-        # Get proxy configuration if available
+        # Get proxy configuration ONLY if use_proxy is True
         proxy_config = None
-        if self.proxy_manager.has_proxies():
+        if use_proxy and self.proxy_manager.has_proxies():
             proxy_info = self.proxy_manager.get_next_proxy()
             if proxy_info:
                 proxy_config = self.proxy_manager.convert_to_playwright_format(proxy_info)
-        
-        result_q = multiprocessing.Queue()
-        proc = multiprocessing.Process(
-            target=_subprocess_fetch,
-            args=(
-                result_q,
-                url,
-                self.headless,
-                self.solve_cloudflare,
-                network_idle,
-                google_search,
-                timeout,
-                self.block_images,
-                self.disable_resources,
-                proxy_config
-            ),
-            daemon=True
-        )
-        try:
-            proc.start()
-        except Exception:
-            # Fallback to immediate failure if process cannot start
+
+        # Acquire browser semaphore to limit concurrent browser instances
+        # This prevents Camoufox crashes from too many concurrent processes
+        # Timeout = scraping timeout + 30s buffer (dynamic based on page complexity)
+        semaphore_timeout = self.timeout + 30
+        acquired = self.browser_semaphore.acquire(timeout=semaphore_timeout)
+        if not acquired:
+            self.logger.warning(f"Browser semaphore timeout for {url} after {semaphore_timeout}s - increase --workers or reduce concurrent load")
             return None
 
-        msg = None
         try:
-            msg = result_q.get(timeout=max(1, int(timeout)))
-        except Exception:
-            msg = None
-
-        if msg is None:
+            result_q = multiprocessing.Queue()
+            proc = multiprocessing.Process(
+                target=_subprocess_fetch,
+                args=(
+                    result_q,
+                    url,
+                    self.headless,
+                    self.solve_cloudflare,
+                    network_idle,
+                    google_search,
+                    timeout,
+                    self.block_images,
+                    self.disable_resources,
+                    proxy_config
+                ),
+                daemon=True
+            )
             try:
-                proc.terminate()
+                proc.start()
             except Exception:
-                pass
+                # Fallback to immediate failure if process cannot start
+                return None
+
+            msg = None
+            try:
+                msg = result_q.get(timeout=max(1, int(timeout)))
+            except Exception:
+                msg = None
+
+            if msg is None:
+                try:
+                    proc.terminate()
+                except Exception:
+                    pass
+                try:
+                    proc.join(timeout=3)
+                except Exception:
+                    pass
+                try:
+                    self.logger.error(f"Dynamic fetch timeout: {url}")
+                except Exception:
+                    pass
+                return None
+
+            # Ensure child exits cleanly
             try:
                 proc.join(timeout=3)
+                # If process still alive after timeout, force kill it
+                if proc.is_alive():
+                    proc.terminate()
+                    proc.join(timeout=2)
+                    if proc.is_alive():
+                        proc.kill()
+                        proc.join(timeout=1)
             except Exception:
                 pass
-            try:
-                self.logger.error(f"Dynamic fetch timeout: {url}")
-            except Exception:
-                pass
+            finally:
+                # Clean up queue resources
+                try:
+                    result_q.close()
+                    result_q.join_thread()
+                except Exception:
+                    pass
+
+            if msg.get('ok'):
+                return SimpleNamespace(
+                    status=msg.get('status', 200),
+                    html_content=msg.get('html_content', ''),
+                    url=msg.get('final_url', url),
+                    proxy_used=proxy_config.get('server') if proxy_config else None
+                )
+            else:
+                if proxy_config and 'server' in proxy_config:
+                    error_msg = msg.get('error', '')
+                    if any(keyword in error_msg.lower() for keyword in ['proxy', 'connection', 'timeout', 'refused']):
+                        self.proxy_manager.mark_proxy_failed(proxy_config['server'], reason=error_msg)
+                try:
+                    self.logger.error(f"Dynamic fetch error: {url} | {msg.get('error', '')}")
+                except Exception:
+                    pass
             return None
 
-        # Ensure child exits cleanly
-        try:
-            proc.join(timeout=3)
-            # If process still alive after timeout, force kill it
-            if proc.is_alive():
-                proc.terminate()
-                proc.join(timeout=2)
-                if proc.is_alive():
-                    proc.kill()
-                    proc.join(timeout=1)
-        except Exception:
-            pass
         finally:
-            # Clean up queue resources
-            try:
-                result_q.close()
-                result_q.join_thread()
-            except Exception:
-                pass
-
-        if msg.get('ok'):
-            return SimpleNamespace(
-                status=msg.get('status', 200),
-                html_content=msg.get('html_content', ''),
-                url=msg.get('final_url', url),
-                proxy_used=proxy_config.get('server') if proxy_config else None
-            )
-        else:
-            if proxy_config and 'server' in proxy_config:
-                error_msg = msg.get('error', '')
-                if any(keyword in error_msg.lower() for keyword in ['proxy', 'connection', 'timeout', 'refused']):
-                    self.proxy_manager.mark_proxy_failed(proxy_config['server'], reason=error_msg)
-            try:
-                self.logger.error(f"Dynamic fetch error: {url} | {msg.get('error', '')}")
-            except Exception:
-                pass
-        return None
+            # Always release browser semaphore to prevent deadlock
+            self.browser_semaphore.release()
 
     def scrape_url(self, url: str) -> Dict:
         """
-        Fetch webpage content with anti-bot bypass and JavaScript rendering.
-        Enhanced with better error handling and contact page detection.
+        Fetch webpage content with smart proxy usage and anti-bot bypass.
+
+        SMART PROXY MODE:
+        - Attempt 1: Direct (no proxy) with fast timeout
+        - Detection: Analyze if proxy is needed
+        - Attempt 2-4: With proxy (up to 3 retries with different proxies)
+
+        This dramatically reduces proxy bandwidth usage while maintaining success rate.
 
         Args:
             url (str): Target URL to scrape
@@ -1306,156 +1573,210 @@ class WebScraper:
             'load_time': 0,
             'page_title': '',
             'meta_description': '',
-            'is_contact_page': False
+            'is_contact_page': False,
+            'proxy_used': False
         }
 
         start_time = time.time()
+        total_budget = 90  # Total time budget per URL
+        self.proxy_stats['total_requests'] += 1
 
-        # Set domain context for Scrapling logs and emit a domain line up-front
+        # Set domain context for Scrapling logs
         _SCRAPLING_CONTEXT.domain = (urlparse(url).netloc or '').lower()
-        # Intentionally do not emit via the 'scrapling' logger to avoid triggering its handlers
-        # and potential noisy output from third-party logging configuration.
-        # No-op here.
 
         try:
-            # Preflight: if a Cloudflare wait page is detected, poll up to cf_wait_timeout
-            # without invoking the dynamic renderer, then fail fast. This prevents the internal
-            # StealthyFetcher from hanging on the wait page and keeps changes scoped to CF-only paths.
+            # ===== ATTEMPT 1: Direct (No Proxy) - Fast attempt =====
+            attempt1_budget = 15  # seconds
+
+            # Step 1.1: Quick Cloudflare wait page detection
             if self.solve_cloudflare:
                 try:
                     if self._is_cloudflare_wait_page(url, timeout=3):
-                        try:
-                            logging.getLogger('scrapling').info("Cloudflare wait page detected (preflight); polling until timeout")
-                        except Exception:
-                            pass
-                        deadline = start_time + self.cf_wait_timeout
-                        backoff = 1
-                        while time.time() < deadline:
-                            time.sleep(backoff)
-                            # Re-check if the wait page has cleared
-                            if not self._is_cloudflare_wait_page(url, timeout=3):
-                                break
-                            backoff = min(backoff * 2, 6)
-                        # Still a wait page after polling window -> fail fast without dynamic fetcher
-                        if self._is_cloudflare_wait_page(url, timeout=3):
-                            result['error'] = f"Cloudflare wait page persisted after {self.cf_wait_timeout}s; skipping"
-                            result['status'] = 408
-                            result['load_time'] = time.time() - start_time
-                            return result
+                        # Cloudflare detected - skip direct attempt, go straight to proxy
+                        result['error'] = 'cloudflare_wait_detected'
+                        result['status'] = 503
+                        result['requires_proxy'] = True
+                        self.logger.info(f"🔴 CF wait page detected, skipping direct attempt: {url}")
+                        # Jump to proxy mode immediately
+                        pass
+                    else:
+                        # No CF wait page, try static first
+                        if self.static_first:
+                            static_result = self._try_static_fetch(url)
+                            if static_result and static_result.get('status') == 200:
+                                # ✅ SUCCESS without proxy!
+                                static_result['proxy_used'] = False
+                                static_result['load_time'] = time.time() - start_time
+                                self.proxy_stats['proxy_avoided'] += 1
+                                self.proxy_stats['direct_success'] += 1
+                                self.proxy_stats['time_saved_seconds'] += (total_budget - static_result['load_time'])
+                                return static_result
                 except Exception:
-                    # Ignore preflight errors and proceed
                     pass
 
-            # 1) Static-first: attempt lightweight HTML fetch, then fall back
-            if self.static_first:
-                static_result = self._try_static_fetch(url)
-                if static_result is not None:
-                    return static_result
+            # Step 1.2: Try quick dynamic fetch without proxy
+            elapsed = time.time() - start_time
+            remaining = total_budget - elapsed
 
-            # 2) Fall back to StealthyFetcher with rendering/anti-bot bypass
-            # Enhanced: Use longer timeout for initial fetch to allow challenge completion
-            # Previous 5s was too short for complex challenges
-            eff_timeout = (self.cf_wait_timeout if self.solve_cloudflare else self.timeout)
-            page = self._fetch_with_timeout(
-                url,
-                timeout=eff_timeout,
-                google_search=False,
-                network_idle=self.network_idle,  # Use configured network_idle for proper page loading
-            )
-            if page is None:
-                # Initial dynamic attempt timed out; annotate and proceed to CF handling/backoff
-                result['status'] = 408 if self.solve_cloudflare else (result['status'] or 500)
-                result['error'] = result['error'] or 'dynamic_fetch_timeout'
-                result['final_url'] = url
-                result['html'] = ''
-                result['load_time'] = time.time() - start_time
+            if remaining > 10 and not result.get('requires_proxy'):
+                # Try dynamic WITHOUT proxy, short timeout
+                page = self._fetch_with_timeout(
+                    url,
+                    timeout=int(min(10, remaining)),
+                    google_search=False,
+                    network_idle=False,  # Fast mode
+                    use_proxy=False  # KEY: No proxy on first attempt
+                )
+
+                if page and page.status == 200:
+                    # ✅ SUCCESS without proxy!
+                    result['html'] = page.html_content
+                    result['status'] = 200
+                    result['final_url'] = page.url
+                    result['load_time'] = time.time() - start_time
+                    result['proxy_used'] = False
+                    self.proxy_stats['proxy_avoided'] += 1
+                    self.proxy_stats['direct_success'] += 1
+                    self.proxy_stats['time_saved_seconds'] += (total_budget - result['load_time'])
+
+                    # Extract metadata
+                    if result['html']:
+                        soup = BeautifulSoup(result['html'], 'html.parser')
+                        title_tag = soup.find('title')
+                        if title_tag:
+                            result['page_title'] = title_tag.get_text().strip()
+                        meta_desc = soup.find('meta', attrs={'name': 'description'})
+                        if meta_desc:
+                            result['meta_description'] = meta_desc.get('content', '').strip()
+                        result['is_contact_page'] = self.is_contact_page(result['html'], result['final_url'])
+
+                    return result
+
+                # Store attempt 1 result for detection
+                attempt1_result = {
+                    'status': page.status if page else 0,
+                    'html': page.html_content if page else '',
+                    'error': result.get('error') or ('dynamic_fetch_timeout' if not page else ''),
+                    'load_time': time.time() - start_time
+                }
+                self.proxy_stats['direct_failed'] += 1
             else:
-                result['status'] = getattr(page, 'status', 200)
-                result['html'] = getattr(page, 'html_content', '')
-                result['final_url'] = getattr(page, 'url', url)
+                # Budget exhausted or CF detected
+                attempt1_result = {
+                    'status': result.get('status', 0),
+                    'html': result.get('html', ''),
+                    'error': result.get('error', ''),
+                    'load_time': time.time() - start_time,
+                    'requires_proxy': result.get('requires_proxy', False)
+                }
+
+            # ===== DETECTION PHASE =====
+            detection = self._detect_if_needs_proxy(url, attempt1_result)
+
+            if detection['skip']:
+                # Fast-fail, don't waste proxy bandwidth
+                result['error'] = f"Skipped: {detection['reason']}"
                 result['load_time'] = time.time() - start_time
+                return result
 
-            # Detect Cloudflare challenge and apply bounded retry/backoff
-            if self.solve_cloudflare:
-                if (not result['html']) or self._looks_like_challenge(result['html'], result['final_url']):
-                    # Optional fast-fail: skip immediately on detected challenge
-                    if self.skip_on_challenge:
-                        result['error'] = 'cloudflare_challenge_detected_skip_dynamic'
-                        # Use 503 to indicate service unavailable due to challenge
-                        if not isinstance(result['status'], int) or result['status'] in (200, 0):
-                            result['status'] = 503
+            if not detection['use_proxy']:
+                # Detection says no proxy needed, but attempt 1 failed
+                result['error'] = 'failed_without_proxy_indication'
+                result['load_time'] = time.time() - start_time
+                return result
+
+            # ===== ATTEMPT 2-4: With Proxy (Retry up to 3 times) =====
+            max_retries = 3
+            tried_proxies = []
+
+            for retry_num in range(max_retries):
+                elapsed = time.time() - start_time
+                remaining = total_budget - elapsed
+
+                if remaining < 10:
+                    result['error'] = 'insufficient_budget_for_proxy'
+                    result['load_time'] = time.time() - start_time
+                    break
+
+                # Get different proxy for each retry
+                if retry_num == 0:
+                    proxy_timeout = int(min(detection['timeout'], remaining))
+                    retry_msg = "initial"
+                else:
+                    proxy_timeout = int(min(30, remaining))  # Shorter timeout for retries
+                    retry_msg = f"retry {retry_num}"
+                    self.proxy_stats['proxy_retries'] += 1
+
+                self.logger.info(
+                    f"🔄 Proxy attempt ({retry_msg}) | Reason: {detection['reason']} | "
+                    f"Timeout: {proxy_timeout}s | URL: {url}"
+                )
+
+                page = self._fetch_with_timeout(
+                    url,
+                    timeout=proxy_timeout,
+                    google_search=False,
+                    network_idle=True,  # Full mode for challenges
+                    use_proxy=True  # Use proxy now
+                )
+
+                if page and page.status == 200 and page.html_content:
+                    # Check if it's actually successful (not a challenge page)
+                    if not self._looks_like_challenge(page.html_content, page.url):
+                        # ✅ SUCCESS with proxy
+                        result['html'] = page.html_content
+                        result['status'] = 200
+                        result['final_url'] = page.url
+                        result['load_time'] = time.time() - start_time
+                        result['proxy_used'] = True
+                        self.proxy_stats['proxy_used'] += 1
+                        self.proxy_stats['proxy_justified'] += 1
+                        self.proxy_stats['proxy_success'] += 1
+
+                        # Extract metadata
+                        soup = BeautifulSoup(result['html'], 'html.parser')
+                        title_tag = soup.find('title')
+                        if title_tag:
+                            result['page_title'] = title_tag.get_text().strip()
+                        meta_desc = soup.find('meta', attrs={'name': 'description'})
+                        if meta_desc:
+                            result['meta_description'] = meta_desc.get('content', '').strip()
+                        result['is_contact_page'] = self.is_contact_page(result['html'], result['final_url'])
+
                         return result
-                    try:
-                        logging.getLogger('scrapling').info("Cloudflare challenge detected; applying bounded wait/backoff")
-                    except Exception:
-                        pass
-                    deadline = start_time + self.cf_wait_timeout
-                    backoff = 1
-                    while time.time() < deadline:
-                        remaining = max(1, int(deadline - time.time()))
-                        try:
-                            time.sleep(backoff)
-                            page = self._fetch_with_timeout(
-                                url,
-                                timeout=min(remaining, 30),  # Increased from 10 to 30 seconds
-                                google_search=True,
-                                network_idle=True,  # Enable network idle for challenge solving
-                            )
-                            if page is not None:
-                                result['status'] = getattr(page, 'status', 200)
-                                result['html'] = getattr(page, 'html_content', '')
-                                result['final_url'] = getattr(page, 'url', url)
-                                result['load_time'] = time.time() - start_time
-                                # Exit loop once challenge no longer detected
-                                if result['html'] and not self._looks_like_challenge(result['html'], result['final_url']):
-                                    break
-                            # When page is None, attempt timed out; continue polling/backoff until deadline
-                        except Exception:
-                            # Break on fetch errors to avoid indefinite loops
-                            break
-                        backoff = min(backoff * 2, 8)
 
-                    # If still challenge after bounded wait, annotate error and fail fast
-                    if (not result['html']) or self._looks_like_challenge(result['html'], result['final_url']):
-                        result['error'] = f"Cloudflare challenge persisted after {self.cf_wait_timeout}s; skipping"
-                        if not isinstance(result['status'], int) or result['status'] in (200, 0):
-                            result['status'] = 408
+                # Failed with this proxy, try another
+                if page and hasattr(page, 'proxy_used') and page.proxy_used:
+                    tried_proxies.append(page.proxy_used)
 
-            # Extract additional metadata (based on final result HTML)
-            if result['html']:
-                soup = BeautifulSoup(result['html'], 'html.parser')
+                # Last retry?
+                if retry_num == max_retries - 1:
+                    # All retries exhausted
+                    result['error'] = f"Failed after {max_retries} proxy attempts: {detection['reason']}"
+                    result['status'] = page.status if page else 0
+                    result['load_time'] = time.time() - start_time
+                    result['proxy_used'] = True
+                    self.proxy_stats['proxy_used'] += max_retries
+                    self.proxy_stats['proxy_wasted'] += max_retries
+                    self.proxy_stats['proxy_failed'] += 1
+                    break
 
-                title_tag = soup.find('title')
-                if title_tag:
-                    result['page_title'] = title_tag.get_text().strip()
-
-                meta_desc = soup.find('meta', attrs={'name': 'description'})
-                if meta_desc:
-                    result['meta_description'] = meta_desc.get('content', '').strip()
-
-                result['is_contact_page'] = self.is_contact_page(result['html'], result['final_url'])
+            return result
 
         except Exception as e:
             elapsed = time.time() - start_time
-            # If Cloudflare wait exceeded per-URL threshold, mark and skip
-            if self.solve_cloudflare and elapsed >= self.cf_wait_timeout:
-                result['error'] = f"Cloudflare wait page timeout exceeded {self.cf_wait_timeout}s; skipping"
-                result['status'] = 408
-            else:
-                result['error'] = str(e)
-                # Set status to indicate error if not already set
-                if result['status'] == 0:
-                    result['status'] = 500
+            result['error'] = str(e)
+            if result['status'] == 0:
+                result['status'] = 500
             result['load_time'] = elapsed
+            return result
 
         finally:
-            # Clear domain context to avoid leaking to other requests/threads
+            # Clear domain context
             try:
                 _SCRAPLING_CONTEXT.domain = None
             except Exception:
                 pass
-
-        return result
 
     def gather_contact_info(self, url: str) -> Dict:
         """

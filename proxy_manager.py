@@ -18,7 +18,7 @@ class ProxyManager:
     def __init__(self, proxy_file: str = "proxy.txt"):
         """
         Initialize proxy manager.
-        
+
         Args:
             proxy_file: Path to proxy file (default: proxy.txt)
         """
@@ -27,8 +27,9 @@ class ProxyManager:
         self.current_index = 0
         self.lock = threading.Lock()
         self.failed_proxies = set()
+        self.temp_failed = {}  # Track temporarily failed proxies per request
         self.logger = logging.getLogger(__name__)
-        
+
         # Load proxies if file exists
         self._load_proxies()
     
@@ -173,22 +174,62 @@ class ProxyManager:
     def get_random_proxy(self) -> Optional[Dict[str, Any]]:
         """
         Get a random proxy from available list.
-        
+
         Returns:
             Random proxy configuration dict or None if no proxies available
         """
         if not self.proxies:
             return None
-        
+
         with self.lock:
             # Filter out failed proxies
             available_proxies = [p for p in self.proxies if p['server'] not in self.failed_proxies]
-            
+
             if not available_proxies:
                 # Reset failed proxies if all are failed
                 self.failed_proxies.clear()
                 available_proxies = self.proxies
-            
+
+            return random.choice(available_proxies).copy()
+
+    def get_different_proxy(self, exclude_servers: List[str]) -> Optional[Dict[str, Any]]:
+        """
+        Get a proxy that differs from previously tried ones.
+        Used for retry logic to try different proxies.
+
+        Args:
+            exclude_servers: List of proxy servers to exclude (e.g., ['1.2.3.4:8080'])
+
+        Returns:
+            Proxy configuration dict or None if no other proxies available
+        """
+        if not self.proxies:
+            return None
+
+        with self.lock:
+            # Filter out both permanently failed and temporarily excluded proxies
+            available_proxies = [
+                p for p in self.proxies
+                if p['server'] not in self.failed_proxies
+                and p['server'] not in exclude_servers
+            ]
+
+            if not available_proxies:
+                # If no proxies left, try from excluded list (last resort)
+                available_proxies = [
+                    p for p in self.proxies
+                    if p['server'] not in self.failed_proxies
+                ]
+
+                if not available_proxies:
+                    # All proxies permanently failed, reset and try again
+                    self.failed_proxies.clear()
+                    available_proxies = self.proxies
+
+            if not available_proxies:
+                return None
+
+            # Return random proxy from available pool
             return random.choice(available_proxies).copy()
     
     def has_proxies(self) -> bool:

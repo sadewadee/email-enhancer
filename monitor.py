@@ -183,11 +183,11 @@ def start_main_for_country(country: str, logger: logging.Logger) -> bool:
         "--output-dir",
         str(DATA_DIR),
         "--workers",
-        "15",
+        "10",  # Jumlah worker untuk main.py
         "--timeout",
         "60",  # Request timeout in seconds
         "--cf-wait-timeout",
-        "120",  # Cloudflare challenge timeout (increased from default 60)
+        "90",  # Cloudflare challenge timeout (increased from default 60)
     ]
     log_file = Path("logs") / f"main_{country}.log"
     logger.info(f"Menjalankan: {' '.join(cmd)} | py: {PYTHON_BIN} | log: {log_file}")
@@ -255,6 +255,24 @@ def monitor_loop():
                     did_import = False
                     last_sid = None
                     for csv_file in DATA_DIR.glob("*.csv"):
+                        # Check for completion marker - skip if not present
+                        marker_file = csv_file.with_suffix('.complete')
+                        if not marker_file.exists():
+                            logger.debug(f"⏭️  Skip {csv_file.name} - no completion marker (still processing or failed)")
+                            continue
+
+                        # Read marker metadata for logging
+                        try:
+                            import json
+                            with open(marker_file, 'r') as f:
+                                marker_data = json.load(f)
+                            status = marker_data.get('status', 'unknown')
+                            rows = marker_data.get('total_rows', 0)
+                            logger.info(f"📋 Found completed file: {csv_file.name} (status={status}, rows={rows})")
+                        except Exception:
+                            # Marker exists but couldn't read - proceed anyway
+                            logger.warning(f"⚠️  Marker exists but unreadable: {marker_file.name}")
+
                         title = csv_file.stem
                         if title.endswith('_processed'):
                             title = title[:-10]
@@ -262,14 +280,20 @@ def monitor_loop():
                             ss = gsheets_sync._get_client().open_by_key(spreadsheet_id)
                             try:
                                 ss.worksheet(title)
+                                logger.debug(f"⏭️  Sheet '{title}' already exists, skipping")
                                 continue
                             except Exception:
                                 pass
                             last_sid = gsheets_sync.sync_csv_to_sheet(str(csv_file), spreadsheet_id, title, replace=True)
                             did_import = True
-                            logger.info(f"Sinkronisasi ke Google Sheets selesai: {csv_file} -> tab '{title}'")
+                            logger.info(f"✅ Sinkronisasi ke Google Sheets selesai: {csv_file} -> tab '{title}'")
+
+                            # Optional: Remove marker after successful upload to allow re-processing
+                            # Uncomment the line below if you want automatic marker cleanup
+                            # marker_file.unlink()
+
                         except Exception as e:
-                            logger.error(f"Sinkronisasi ke Google Sheets gagal untuk {csv_file}: {e}")
+                            logger.error(f"❌ Sinkronisasi ke Google Sheets gagal untuk {csv_file}: {e}")
                     if did_import and last_sid:
                         gsheets_sync.build_global_summary(last_sid, "Summary")
                 else:

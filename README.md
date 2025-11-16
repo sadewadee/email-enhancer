@@ -1,355 +1,240 @@
 # Email Scraper & Validator
 
-A comprehensive tool for extracting and validating contact information (emails, phone numbers, WhatsApp) from websites with multi-source approach and bot protection bypass (Cloudflare).
-
-## 🚀 Key Features
-
-- **Multi-Source Contact Extraction**: Header, footer, contact pages, structured data (JSON-LD, microdata/RDFa), and general content
-- **Advanced Email Detection**:
-  - Mailto links and HTML attributes
-  - Cloudflare-protected emails (`data-cfemail`, CDN-CGI decoding)
-  - Deobfuscated emails (`[at]`, `[dot]` patterns)
-  - Multi-layer priority: header → footer → structured data → contact pages → general content
-- **SMTP-Level Email Validation**: Without sending emails, includes validation reason in `validated_emails` column
-- **Bot Protection Bypass**: Cloudflare bypass via stealth browser engine with headless JavaScript rendering
-- **Social Media Auto-Skip**: Detects and skips social media URLs (`scraping_status = skipped_social`)
-- **Smart Resource Optimization**: Light-load mode by default (blocks images, keeps critical JS/CSS)
-- **Proxy Support**: Automatic proxy rotation from file with failure handling
-- **Parallel Processing**: Configurable workers with batch processing and structured logging
-- **Minimal Output by Default**: Single `*_processed.csv` file (long-form)
-- **Optional Outputs**: Wide-form format and summary reports via flags
-
-## 📋 System Requirements
-
-- Python 3.11 (recommended) or 3.8+
-- Internet connection
-- 4GB RAM (8GB+ recommended for large datasets)
-- For Playwright browser: `python -m playwright install`
-
-## ⚡ Quick Setup
-
-### Option A — Automated
-```bash
-./installer.sh
-./run.sh single sample-input.csv --output-dir results/
-```
-
-### Option B — Manual
-```bash
-python3 -m venv venv
-source venv/bin/activate  # macOS/Linux
-# On Windows: venv\Scripts\activate
-pip install -r requirements.txt
-python -m playwright install  # if needed
-python main.py single sample-input.csv --output-dir results/
-```
-
-## 📁 Input File Structure
-
-Requires at minimum a `url` column. Other columns will be preserved in output.
-
-```csv
-url,name,street,city,country_code
-https://example.com,Example Corp,Main St,New York,US
-https://another-site.com,Another Co,Central Rd,London,GB
-```
-
-## 📖 Usage
-
-### Single CSV File
-```bash
-python main.py single sample-input.csv --output-dir datas --workers 10
-```
-
-**Common Options:**
-- `--output-dir`: Output directory (default: same as input directory)
-- `--url-column`: URL column name (default: `url`)
-- `--workers`: Number of parallel workers (default: 10)
-- `--timeout`: Request timeout in seconds (default: 30)
-- `--log-level`: Logging level - DEBUG, INFO, WARNING, ERROR (default: INFO)
-
-### Batch Processing (Multiple CSV Files)
-```bash
-python main.py batch file1.csv file2.csv --output-dir datas --merge
-```
-
-**Batch Options:**
-- `--merge`: Combine all results into `merged_results.csv`
-
-### Single URL
-```bash
-python main.py url https://example.com --output datas/example_processed.csv
-```
-
-## ⚙️ Configuration Options
-
-### Processing Options
-- `--workers`: Number of parallel workers (default: 10)
-- `--timeout`: Request timeout in seconds (default: 30)
-- `--batch-size`: Batch processing size (default: 100; auto-adjusted to be > workers)
-- `--chunk-size`: Chunked CSV read size in rows (default: 0 = disabled)
-
-### Output Options
-- `--output-format`: `long` (default) or `wide`
-  - **long**: One email per row (recommended for large datasets)
-  - **wide**: Multiple emails in columns (up to `--max-contacts`)
-- `--max-contacts`: Maximum contacts per type in wide format (default: 10)
-- `--report` / `--no-report`: Generate summary report (default: OFF)
-- `--dedup` / `--no-dedup`: In-place deduplication (default: ON)
-
-### Performance & Resource Options
-- `--light-load`: **[Default ON]** Enable light-load mode
-  - Blocks images
-  - Keeps Cloudflare-critical JS/CSS via allowlist routing
-- `--no-light-load`: Disable light-load (loads all resources; no allowlist)
-- `--disable-resources`: Disable non-essential resources (fonts, video, media)
-- `--no-network-idle`: Don't wait for network idle (useful for wait pages/long-polling)
-
-### Cloudflare Options
-- `--cf-wait-timeout`: Per-URL Cloudflare wait timeout in seconds (default: 60)
-- `--skip-on-challenge`: Skip immediately when Cloudflare challenge detected (no retries)
-
-### Proxy Options
-- `--proxy-file`: Path to proxy file for automatic rotation (default: `proxy.txt`)
-
-**Light-Load Mode Details:**
-- **Default "safe light-load"**: `block_images=ON`, `disable_resources=OFF`, `network_idle=ON`
-- **With `--no-light-load`**: `block_images=OFF`, `disable_resources=ON` (blocks non-essential resources globally)
-
-**Cloudflare Bypass References:**
-- See documentation: `CLOUDFLARE_BYPASS_SOLUTION.md` and `FINAL_CLOUDFLARE_SOLUTION.md`
-
-## 📦 Output Files
-
-**Default Output:**
-- `*_processed.csv` (long-form with all columns)
-
-**Optional Outputs:**
-- Wide format: Add `--output-format wide` → generates `*_wide_form.csv`
-- Report: Add `--report` → generates `*_report.txt`
-
-**Batch with Merge:**
-- `merged_results.csv`
-- If `--output-format wide`: `merged_results_wide_form.csv`
-- If `--report`: `merged_results_report.txt`
-
-**Deduplication:**
-- Performed in-place on `*_processed.csv` (no separate `*_deduplicated.csv` file)
-
-## 🧾 Output Columns (Processed CSV)
-
-**Preserved Columns:**
-- All original columns from input CSV
-
-**New Contact Columns:**
-- `emails`: List of emails found (semicolon-separated)
-- `phones`: List of phone numbers (semicolon-separated)
-- `whatsapp`: List of WhatsApp contacts (semicolon-separated)
-- `validated_emails`: Emails with validation reasons, e.g., `name@domain.com (mx_ok)`, `info@x.y (smtp_timeout)`
-
-**Metadata Columns:**
-- `scraping_status`: `success` | `no_contacts_found` | `skipped_social` | `error`
-- `scraping_error`: Error message (if any)
-- `processing_time`: Processing duration per URL (seconds)
-- `pages_scraped`: Number of pages processed
-- `emails_found`: Count of emails found
-- `phones_found`: Count of phone numbers found
-- `whatsapp_found`: Count of WhatsApp contacts found
-- `validated_emails_count`: Count of validated emails
-
-## 🔍 How It Works
-
-### Email Extraction Process
-
-The scraper uses a **multi-layer approach** to extract emails:
-
-#### 1. **Priority-Based Extraction**
-- **Header** (highest priority) → `<header>`, `.header`, `<nav>`, `.navbar`
-- **Footer** → `<footer>`, `.footer`
-- **Structured Data** → JSON-LD, Schema.org microdata
-- **Contact Pages** → Auto-detect and scrape `/contact`, `/kontak`, etc.
-- **General Content** (fallback)
-
-#### 2. **Detection Methods**
-- **Mailto Links**: `<a href="mailto:...">` tags
-- **Cloudflare-Protected**:
-  - `data-cfemail` attribute decoding
-  - `/cdn-cgi/l/email-protection#` links with XOR cipher
-- **HTML Attributes**: `data-email`, `data-mail`, `onclick="mailto:..."`
-- **Deobfuscation**:
-  - `name [at] domain [dot] com` → `name@domain.com`
-  - `name (at) domain (dot) com` → `name@domain.com`
-- **Text Pattern Matching**: Standard email regex with boundary detection
-
-#### 3. **Validation & Filtering**
-- Filters placeholder domains (`example.com`, `mysite.com`)
-- Removes implausible local-parts (containing 'email', 'mailto')
-- Deduplicates suspicious variants
-- TLD validation using Public Suffix List
-- SMTP-level validation with detailed reasons
-
-### Contact Page Discovery
-- Automatically finds and scrapes contact pages (`/contact`, `/contact-us`, `/kontakt`, etc.)
-- Combines results from main page and all discovered contact pages
-
-### Social Media Detection
-- Popular social media URLs are automatically skipped
-- Status marked as `skipped_social`
-
-## 🧪 Example Commands
-
-```bash
-# Minimal run (single processed file output)
-python main.py single sample-input.csv --output-dir datas
-
-# With wide-form and report
-python main.py single sample-input.csv --output-dir datas --output-format wide --report
-
-# Batch merge with dedup OFF and report ON
-python main.py batch file1.csv file2.csv --output-dir datas --merge --no-dedup --report
-
-# Single URL to specific file
-python main.py url https://example.com --output datas/example_processed.csv
-
-# High-performance run with 20 workers and DEBUG logging
-python main.py single large-input.csv --workers 20 --timeout 60 --log-level DEBUG
-
-# Skip Cloudflare challenges immediately (fast mode)
-python main.py single input.csv --skip-on-challenge --cf-wait-timeout 30
-
-# Full resources mode (no light-load)
-python main.py single input.csv --no-light-load
-```
-
-## 🌐 Proxy Support
-
-Use `--proxy-file` to provide a list of proxies (default: `proxy.txt`).
-
-**Proxy File Format:**
-```
-http://user:pass@host:port
-socks5://host:port
-https://host:port
-```
-
-**Features:**
-- Automatic proxy rotation
-- Failure detection and retry with different proxy
-- Playwright-compatible format conversion
-
-See [DOCUMENTATION.md](DOCUMENTATION.md#proxy-support) for detailed proxy setup guide.
-
-## 📚 Documentation
-
-- **[DOCUMENTATION.md](DOCUMENTATION.md)** - Comprehensive documentation (setup, usage, configuration, troubleshooting, development)
-- **[CHANGELOG.md](CHANGELOG.md)** - Version history and updates
-- **[README.md](README.md)** - Quick start guide (this file)
-
-## 🛠️ Logging & Troubleshooting
-
-### Logging
-- Logs saved in `logs/` directory with timestamp in filename
-- Console output: INFO level (minimal)
-- File output: DEBUG level (verbose with URL, validation details)
-- Format: `logs/email_scraper_YYYYMMDD_HHMMSS.log`
-
-### Common Issues
-
-**Module Import Errors:**
-```bash
-pip install -r requirements.txt
-```
-
-**Browser/Playwright Errors:**
-```bash
-python -m playwright install
-```
-
-**Timeout/Slow Connection:**
-- Increase `--timeout` (e.g., `--timeout 60`)
-- Decrease `--workers` (e.g., `--workers 5`)
-- Use `--no-network-idle` if needed
-- Use `--skip-on-challenge` to skip slow Cloudflare pages
-
-**High Memory Usage:**
-- Decrease `--workers`
-- Enable `--chunk-size` for large CSV files (e.g., `--chunk-size 1000`)
-- Use `--light-load` (default) to reduce resource consumption
-
-**Cloudflare Challenges:**
-- Default timeout: 60s per URL
-- Adjust with `--cf-wait-timeout`
-- Use `--skip-on-challenge` to skip immediately
-- Check `logs/` for detailed error messages
-
-## 🔧 Advanced Configuration
-
-### Performance Tuning
-```bash
-# Fast mode (may miss some content)
-python main.py single input.csv --workers 20 --timeout 20 --skip-on-challenge
-
-# Thorough mode (slower but comprehensive)
-python main.py single input.csv --workers 5 --timeout 60 --no-light-load
-
-# Balanced mode (recommended)
-python main.py single input.csv --workers 10 --timeout 30
-```
-
-### Memory-Constrained Environments
-```bash
-# Process large CSV files in chunks
-python main.py single large-file.csv --chunk-size 500 --workers 5
-```
-
-### Debugging
-```bash
-# Enable DEBUG logging to see detailed extraction process
-python main.py single input.csv --log-level DEBUG
-
-# Check log file for detailed information
-tail -f logs/email_scraper_*.log
-```
-
-## 📝 Best Practices & Ethics
-
-- **Respect `robots.txt`** and website terms of service
-- **Apply rate limiting** as needed (adjust `--workers` and `--timeout`)
-- **No external data transmission**: All processing runs locally
-- **Use proxies responsibly**: Don't overload proxy servers
-- **Check legal requirements**: Ensure compliance with GDPR, CCPA, and local regulations
-- **Test on small datasets first**: Verify configuration before large-scale scraping
-
-## 🔒 Privacy & Security
-
-- All data processing occurs locally on your machine
-- No telemetry or external API calls (except for target websites)
-- Email validation uses local SMTP checks only
-- Proxy credentials are handled securely in memory only
-
-## 📈 Performance Metrics
-
-**Typical Performance:**
-- **Small sites** (1-5 pages): ~5-15 seconds per URL
-- **Medium sites** (5-20 pages): ~15-45 seconds per URL
-- **Large sites** (20+ pages): ~45-120 seconds per URL
-- **With Cloudflare**: Add 10-60 seconds for challenge solving
-
-**Throughput:**
-- 10 workers: ~20-40 URLs per minute (depends on site complexity)
-- 20 workers: ~40-80 URLs per minute (requires 8GB+ RAM)
-
-## 🤝 Contributing
-
-This is a production-ready tool. For bug reports or feature requests, please check the following:
-1. Review `DEVELOPMENT.md` for architecture overview
-2. Check existing logs in `logs/` directory
-3. Test with `--log-level DEBUG` for detailed output
-
-## 📄 License
-
-This tool is provided as-is for legitimate business use cases including lead generation, contact discovery, and business intelligence.
+A comprehensive tool to extract and validate contact information (emails, phone numbers, WhatsApp) from websites at scale. Designed with anti-bot bypass, parallel processing, proxy rotation, and robust post-processing.
+
+- Language: Python 3.9+
+- Scraping: Scrapling [all] (Playwright + stealth/Camoufox)
+- Parsing: BeautifulSoup4
+- Data: pandas, tqdm
+- Validation: email-validator, py3-validate-email, validate_email
+- Extras: TypeScript/Puppeteer helper for public proxy collection
 
 ---
 
-**Email Scraper & Validator** — Accurate, flexible, and easy-to-use contact extraction and validation.
+## Contents
+- Installation
+- Quick Start
+- CLI Usage and Options
+- Proxies
+- Outputs
+- Google Sheets Integration
+- Debugging & Monitoring
+- Performance Tips
+- Development Conventions
+- Mandatory Progress Tracking (WAJIB)
+- Troubleshooting
+
+---
+
+## Installation
+Use the provided installer to bootstrap a local virtual environment and dependencies.
+
+```bash
+# Make scripts executable (first time only)
+chmod +x installer.sh run.sh
+
+# One-time setup
+./installer.sh
+```
+
+The installer will:
+- Create a `venv/` virtual environment
+- Install packages from `requirements.txt`
+- Validate Python/pip and baseline tooling
+
+If you prefer manual setup:
+```bash
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+```
+
+---
+
+## Quick Start
+
+```bash
+# Run via wrapper (activates venv and forwards args)
+./run.sh single input.csv --output-dir results/
+
+# Or run the entrypoint directly (ensure venv is active)
+source venv/bin/activate
+python main.py url https://example.com --output results/example.csv
+```
+
+Input CSV should contain a URL column. The processor auto-detects common names like `url`, `website`, etc.
+
+---
+
+## CLI Usage and Options
+The CLI supports three subcommands: `single`, `batch`, and `url`.
+
+```bash
+python main.py single <input.csv> [options]
+python main.py batch <file1.csv> <file2.csv> ... --output-dir <dir> [--merge] [options]
+python main.py url <https://site> [--output <file>] [options]
+```
+
+Common options (apply to all subcommands):
+- --workers INT                Number of worker threads (default: 10)
+- --timeout INT                Request timeout in seconds (default: 30)
+- --batch-size INT             Batch size for processing (default: 100; auto-adjusted to be > workers)
+- --chunk-size INT             Chunked CSV read size (rows per chunk). 0 disables chunking (default)
+- --max-contacts INT           Max contacts per type in wide format (default: 10)
+- --output-format {wide,long}  Output format (default: long)
+
+Light-load and resource controls:
+- --light-load                 [Default ON] Enable light-load: block images and apply allowlist routing (keeps CF-critical JS/CSS)
+- --no-light-load              Disable light-load (load all resources; no allowlist routing)
+- --no-network-idle            Do not wait for network idle; useful for Cloudflare wait pages or long-polling sites
+- --disable-resources          Disable non-essential resources (fonts, video, media) to save bandwidth
+
+Cloudflare controls:
+- --cf-wait-timeout INT        Per-URL Cloudflare wait timeout in seconds (default: 60)
+- --skip-on-challenge          Skip immediately when Cloudflare challenge is detected (no retries)
+
+Output/reporting & logging:
+- --report                     Enable summary report output
+- --dedup                      Enable deduplication output (redundant when default ON)
+- --no-report                  Skip generating summary report (default: skip)
+- --no-dedup                   Skip deduplication (default: dedupe ON)
+- --dedup-by COLUMN [...]      Columns to use for deduplication (smart defaults if omitted)
+- --log-level {DEBUG,INFO,WARNING,ERROR}  Log level (default: INFO)
+
+Proxy config:
+- --proxy-file PATH            Path to proxy file for auto detection (default: proxy.txt)
+
+Subcommand-specific options:
+- single: --limit N            Process first N rows (for testing)
+- batch:  --limit N            Per-file limit; --merge combines results into a single file
+- url:    --output PATH        Write single-URL result to a CSV file
+
+Examples:
+```bash
+# Process a single CSV with custom workers/timeouts
+python main.py single input.csv --output-dir results/ --workers 20 --timeout 60
+
+# Batch process multiple CSVs and merge outputs
+python main.py batch data/*.csv --output-dir results/ --merge
+
+# Scrape a single URL into a file
+python main.py url https://example.com --output results/example.csv
+```
+
+---
+
+## Proxies
+- Provide proxies in `proxy.txt` (ignored by git) with one per line:
+  - username:password@host:port
+  - host:port
+- Proxies are rotated automatically; failures are tracked and skipped.
+- A helper script `scrapeCroxyProxy.ts` (Node/Puppeteer) is included to scrape public proxy endpoints.
+
+---
+
+## Outputs
+- Long-form CSV (default) written as `*_processed.csv`
+- Wide-form CSV when `--output-format wide` is selected
+- Optional summary report (`--report`) and deduplication (default ON; can be disabled with `--no-dedup`)
+
+The post-processing step also computes useful stats such as overall success rates and contact counts.
+
+---
+
+## Google Sheets Integration (optional)
+Integration utilities live in `gsheets_sync.py`. To enable syncing results to Google Sheets:
+- Set up Google credentials (see gspread/google-auth docs)
+- Load and use the provided helpers in your pipeline to push data to a specific sheet
+
+---
+
+## Debugging & Monitoring
+- debug_cloudflare.py   Analyze Cloudflare wait/challenge flows and timings
+- debug_stuck.py        Diagnose hanging processes
+- debug_logger.py       Verify logging configurations
+- monitor.py            Live monitoring helpers
+
+Useful tips:
+- Increase verbosity with `--log-level DEBUG`
+- Save logs to files by configuring logging handlers as needed
+
+---
+
+## Performance Tips
+
+### ⚙️ Worker Configuration
+
+**IMPORTANT:** The `--workers` parameter controls multiple resource allocations:
+- **Browser instances**: Equals `--workers` (each worker needs 1 browser for scraping)
+- **Producer threads**: `--workers` threads for scraping URLs
+- **Consumer threads**: `workers × 1.5` threads for email validation
+
+**Resource Usage Example:**
+```bash
+--workers 10  # Allocates:
+              # - 10 browser instances (memory intensive!)
+              # - 10 producer threads (scraping)
+              # - 15 consumer threads (email validation)
+```
+
+### 📊 Recommended Values by System Specs
+
+| System RAM | CPU Cores | Recommended --workers | Notes |
+|------------|-----------|----------------------|-------|
+| 8 GB       | 4-6       | `5-8`                | Conservative, stable |
+| 16 GB      | 8-12      | `10-15`              | Balanced performance |
+| 32 GB+     | 16+       | `20-30`              | High throughput |
+
+**⚠️ WARNING:** High `--workers` values consume significant system resources:
+- Each browser instance: ~200-500 MB RAM
+- 50 workers = ~10-25 GB RAM for browsers alone!
+- Monitor system resources when increasing workers
+
+### 🚀 Performance Tuning Tips
+
+- **Start conservative**: Begin with `--workers 10` and increase gradually
+- **Monitor system**: Watch CPU/RAM usage; reduce workers if system becomes unstable
+- **Light-load mode**: Keep enabled (default) to reduce bandwidth/memory
+- **Cloudflare handling**:
+  - Tune `--cf-wait-timeout` for Cloudflare-heavy sites
+  - Use `--no-network-idle` for CF wait pages
+- **Memory-constrained systems**: Reduce `--chunk-size` or `--workers`
+- **Network bottleneck**: Increase `--workers` doesn't help if network is the limit
+
+---
+
+## Development Conventions
+- Read AGENTS.md for architecture overview, patterns, and best practices
+- Use module-level loggers (logging.getLogger(__name__)) and structured error handling
+- Ensure thread-safety with locks for shared state
+- Respect `.gitignore` (results, logs, data, local notes are excluded)
+
+---
+
+## Mandatory Progress Tracking (WAJIB)
+- Maintain `todos.md` to track progress, blockers, and completion
+- Maintain `claude.md` to log AI-assisted sessions and code changes
+- Both files are excluded from git; update them at the start and end of each session
+
+Templates are provided in the repository root.
+
+---
+
+## Troubleshooting
+Cloudflare blocks frequently
+- Try `--no-network-idle`, increase `--cf-wait-timeout`, or `--skip-on-challenge`
+- Ensure proxies are healthy; rotate or replace low-quality endpoints
+
+Hangs / timeouts
+- Lower `--workers`, increase `--timeout`, verify network/proxy uptime
+
+High memory usage
+- Reduce `--workers`, use smaller `--chunk-size`, avoid very large batches
+
+Missing dependencies
+- Re-run `./installer.sh` or `pip install -r requirements.txt`
+
+---
+
+## License
+This repository does not include an explicit OSS license. Use internally unless a license is added.

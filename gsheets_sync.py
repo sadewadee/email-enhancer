@@ -1,6 +1,7 @@
 import os
 import csv
 import time
+import logging
 from typing import Optional, List
 
 import gspread
@@ -83,15 +84,24 @@ def sync_csv_to_sheet(csv_path: str, spreadsheet_id: Optional[str] = None, sheet
     except gspread.exceptions.WorksheetNotFound:
         ws = ss.add_worksheet(title=title, rows=1, cols=1)
 
+    logger = logging.getLogger(__name__)
+
     with open(csv_path, newline="", encoding="utf-8") as f:
         reader = csv.reader(f)
         rows = list(reader)
 
     if not rows:
+        logger.warning(f"⚠️  CSV file is empty: {csv_path}")
         return ss.id
 
     header = rows[0]
     data = rows[1:]
+
+    if not data:
+        logger.warning(f"⚠️  CSV has header only (no data rows): {csv_path}")
+        # Continue anyway to upload header - marker indicates this is intentional
+    else:
+        logger.info(f"📊 Read {len(data)} data rows from {os.path.basename(csv_path)}")
     idx = {k: i for i, k in enumerate(header)}
 
     # Mandatory columns that must match csv_processor.py output
@@ -178,8 +188,18 @@ def sync_csv_to_sheet(csv_path: str, spreadsheet_id: Optional[str] = None, sheet
 
     rows_needed = len(out_rows)
     cols_needed = max(len(r) for r in out_rows) if out_rows else 1
+
+    # Log upload statistics
+    data_rows = len(out_rows) - 1  # Exclude header
+    logger.info(
+        f"📤 Uploading to sheet '{title}': {data_rows} data rows "
+        f"({rows_needed} total including header, {cols_needed} columns)"
+    )
+
     ws.resize(rows_needed, cols_needed)
     _batch_update(ws, out_rows)
+
+    logger.info(f"✅ Successfully uploaded {data_rows} rows to sheet '{title}'")
     return ss.id
 
 
