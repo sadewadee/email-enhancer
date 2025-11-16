@@ -435,6 +435,9 @@ class CSVProcessor:
             writer = csv.DictWriter(csv_file, fieldnames=header)
             writer.writeheader()
 
+            # Start timing the processing
+            start_time = time.time()
+
             # Stats counters
             processed_count = 0  # URLs fully processed (validated + written)
             scraped_count = 0    # URLs scraped (producer done)
@@ -731,6 +734,10 @@ class CSVProcessor:
             except Exception:
                 pass
 
+            # End timing
+            end_time = time.time()
+            total_duration_seconds = end_time - start_time
+
             # Calculate statistics
             stats = {
                 'total_urls': total_urls,
@@ -743,7 +750,10 @@ class CSVProcessor:
                 'total_phones': total_phones,
                 'total_whatsapp': total_whatsapp,
                 'average_processing_time': (total_processing_time / processed_count) if processed_count > 0 else 0,
-                'processing_per_menit': per_menit
+                'processing_per_menit': per_menit,
+                'start_time': start_time,
+                'end_time': end_time,
+                'total_duration_seconds': total_duration_seconds
             }
 
             self.logger.info(f"✅ Completed! Success rate: {stats['success_rate']:.1f}% ({success_count}/{processed_count})")

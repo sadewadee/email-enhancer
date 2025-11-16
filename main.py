@@ -43,12 +43,13 @@ class EmailScraperValidator:
         self.csv_processor = CSVProcessor(
             max_workers=self.config['max_workers'],
             timeout=self.config['timeout'],
-            block_images=self.config.get('block_images', False),
+            block_images=self.config.get('block_images', True),
             disable_resources=self.config.get('disable_resources', False),
             network_idle=self.config.get('network_idle', True),
             cf_wait_timeout=self.config.get('cf_wait_timeout', 30),
             skip_on_challenge=self.config.get('skip_on_challenge', False),
-            proxy_file=self.config.get('proxy_file', 'proxy.txt')
+            proxy_file=self.config.get('proxy_file', 'proxy.txt'),
+            max_concurrent_browsers=self.config['max_workers']
         )
         self.post_processor = PostProcessor()
 
@@ -74,7 +75,7 @@ class EmailScraperValidator:
     def _get_default_config(self) -> Dict[str, Any]:
         """Get default configuration."""
         return {
-            'max_workers': 50,
+            'max_workers': 3,
             'timeout': 120,
             'batch_size': 100,
             'chunk_size': 0,
@@ -583,8 +584,8 @@ Examples:
 
     # Common arguments
     for p in [single_parser, batch_parser, url_parser]:
-        p.add_argument('--workers', type=int, default=10, help='Number of worker threads (default: 10)')
-        p.add_argument('--timeout', type=int, default=30, help='Request timeout in seconds (default: 30)')
+        p.add_argument('--workers', type=int, default=3, help='Number of worker threads (default: 3)')
+        p.add_argument('--timeout', type=int, default=120, help='Request timeout in seconds (default: 120)')
         p.add_argument('--batch-size', type=int, default=100, help='Batch size for processing (default: 100; auto-adjusted to be > workers)')
         p.add_argument('--chunk-size', type=int, default=0, help='Chunked CSV read size (rows per chunk). 0 disables chunking (default).')
         p.add_argument('--max-contacts', type=int, default=10, help='Max contacts per type in wide format (default: 10)')
@@ -635,8 +636,24 @@ Examples:
                 print(f"Email : {stats['total_emails']} | Valid Email : {stats['total_validated_emails']} | Phone : {stats['total_phones']} | WA : {stats['total_whatsapp']}")
                 if 'final_output_file' in result['post_processing']:
                     print(f"Result file: {result['post_processing']['final_output_file']}")
+
+                # Format and display completion time
+                if 'total_duration_seconds' in stats:
+                    duration = int(stats['total_duration_seconds'])
+                    hours = duration // 3600
+                    minutes = (duration % 3600) // 60
+                    seconds = duration % 60
+
+                    if hours > 0:
+                        time_str = f"{hours}h {minutes}m"
+                    elif minutes > 0:
+                        time_str = f"{minutes}m {seconds}s"
+                    else:
+                        time_str = f"{seconds}s"
+
+                    print(f"Completetion time : {time_str}")
             else:
-                print(f"❌ Processing failed: {result.get('error', 'Unknown error')}")
+                print(f"Processing failed: {result.get('error', 'Unknown error')}")
                 sys.exit(1)
 
         elif args.command == 'batch':
@@ -647,18 +664,17 @@ Examples:
                 limit_rows=getattr(args, 'limit', None)
             )
 
-            print(f"✅ Batch processing completed!")
-            print(f"📁 Files processed: {result['successful_files']}/{result['total_files']}")
+            print(f"Batch processing completed!")
+            print(f"Files processed: {result['successful_files']}/{result['total_files']}")
             if 'overall_stats' in result:
                 stats = result['overall_stats']
-                print(f"📊 Overall success rate: {stats['overall_success_rate']:.1f}%")
-                print(f"⚡ Processing per menit: {stats.get('overall_processing_per_menit', 0):.2f} URL/min")
-                print(f"📧 Total emails found: {stats['total_emails_found']}")
-                print(f"✅ Validated emails: {stats['total_validated_emails_found']}")
-                print(f"📱 Phone numbers: {stats['total_phones_found']}")
-                print(f"💬 WhatsApp contacts: {stats['total_whatsapp_found']}")
-            print(f"📂 Output directory: {result['output_directory']}")
-
+                print(f"Overall success rate: {stats['overall_success_rate']:.1f}%")
+                print(f"Processing per menit: {stats.get('overall_processing_per_menit', 0):.2f} URL/min")
+                print(f"Total emails found: {stats['total_emails_found']}")
+                print(f"Validated emails: {stats['total_validated_emails_found']}")
+                print(f"Phone numbers: {stats['total_phones_found']}")
+                print(f"WhatsApp contacts: {stats['total_whatsapp_found']}")
+            print(f"Output directory: {result['output_directory']}")
         elif args.command == 'url':
             result = scraper.process_single_url(
                 url=args.url,
@@ -666,19 +682,19 @@ Examples:
             )
 
             if result['status'] == 'completed':
-                print(f"✅ URL processing completed successfully!")
-                print(f"🌐 URL: {args.url}")
+                print(f"URL processing completed successfully!")
+                print(f"URL: {args.url}")
                 if 'output_file' in result:
-                    print(f"📄 Output file: {result['output_file']}")
+                    print(f"Output file: {result['output_file']}")
             else:
-                print(f"❌ URL processing failed: {result.get('error', 'Unknown error')}")
+                print(f"URL processing failed: {result.get('error', 'Unknown error')}")
                 sys.exit(1)
 
     except KeyboardInterrupt:
-        print("\n⚠️  Processing interrupted by user")
+        print("\nProcessing interrupted by user")
         sys.exit(1)
     except Exception as e:
-        print(f"❌ Fatal error: {str(e)}")
+        print(f"Fatal error: {str(e)}")
         logging.error(f"Fatal error: {str(e)}")
         logging.error(traceback.format_exc())
         sys.exit(1)
