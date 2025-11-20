@@ -28,6 +28,52 @@ from whatsapp_validator import WhatsAppValidator
 from url_cleaner import URLCleaner
 
 # ============================================================================
+# ENCODING DETECTION UTILITY
+# ============================================================================
+
+def detect_file_encoding(file_path: str, sample_size: int = 100000) -> str:
+    """
+    Auto-detect file encoding using chardet with fallback strategy.
+
+    Args:
+        file_path: Path to the file
+        sample_size: Number of bytes to analyze (default 100KB)
+
+    Returns:
+        Detected encoding (e.g., 'utf-8', 'latin-1', 'cp1252')
+    """
+    try:
+        # Read sample from file
+        with open(file_path, 'rb') as f:
+            raw_data = f.read(sample_size)
+
+        # Use chardet to detect encoding
+        detected = chardet.detect(raw_data)
+        encoding = detected.get('encoding', 'utf-8')
+        confidence = detected.get('confidence', 0)
+
+        if encoding and confidence > 0.7:
+            return encoding.lower()
+    except Exception as e:
+        pass
+
+    # Fallback: Try common encodings in order
+    fallback_encodings = ['utf-8', 'latin-1', 'cp1252', 'iso-8859-1', 'utf-16']
+
+    for encoding in fallback_encodings:
+        try:
+            with open(file_path, 'r', encoding=encoding) as f:
+                # Try to read first few lines
+                for _ in range(10):
+                    f.readline()
+            return encoding
+        except (UnicodeDecodeError, LookupError):
+            continue
+
+    # Final fallback
+    return 'utf-8'
+
+# ============================================================================
 # INTELLIGENT CHUNK SIZE CONFIGURATION FOR LARGE FILES
 # ============================================================================
 # Accounts for concurrent browser instances which consume significant RAM
@@ -454,10 +500,16 @@ class CSVProcessor:
         # Auto-detect url_column, will be set in the try block below
         url_column = 'url'  # default fallback
         try:
+            # ========================================================================
+            # AUTO-DETECT FILE ENCODING
+            # ========================================================================
+            detected_encoding = detect_file_encoding(input_file)
+            self.logger.debug(f"🔍 Detected file encoding: {detected_encoding}")
+
             # Read header only to validate columns without loading full data
             # IMPORTANT: Use dtype=str to preserve phone_number format (with '+' prefix)
             # and prevent pandas from auto-converting to INT
-            columns_df = pd.read_csv(input_file, nrows=0, dtype=str)
+            columns_df = pd.read_csv(input_file, nrows=0, dtype=str, encoding=detected_encoding)
 
             # ============================================================================
             # AUTO-CALCULATE OPTIMAL CHUNKSIZE (if not explicitly provided)
@@ -516,7 +568,7 @@ class CSVProcessor:
 
             # Determine total rows with non-empty URL for progress bar
             total_urls = 0
-            with open(input_file, 'r', encoding='utf-8', newline='') as f_in:
+            with open(input_file, 'r', encoding=detected_encoding, newline='') as f_in:
                 reader = csv.DictReader(f_in)
                 for r in reader:
                     u = (r.get(url_column) or '').strip()
@@ -729,9 +781,9 @@ class CSVProcessor:
                     # IMPORTANT: Use dtype=str to preserve phone_number format (with '+' prefix)
                     # and prevent pandas from auto-converting numeric strings to INT
                     if input_chunksize and input_chunksize > 0:
-                        chunk_iter = pd.read_csv(input_file, chunksize=input_chunksize, usecols=select_columns, nrows=limit_rows, dtype=str)
+                        chunk_iter = pd.read_csv(input_file, chunksize=input_chunksize, usecols=select_columns, nrows=limit_rows, dtype=str, encoding=detected_encoding)
                     else:
-                        chunk_iter = [pd.read_csv(input_file, usecols=select_columns, nrows=limit_rows, dtype=str)]
+                        chunk_iter = [pd.read_csv(input_file, usecols=select_columns, nrows=limit_rows, dtype=str, encoding=detected_encoding)]
 
                     # Track total processed for limit enforcement
                     total_processed_so_far = 0

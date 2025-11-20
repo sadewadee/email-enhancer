@@ -1,0 +1,18 @@
+# Core dependencies for Email Scraper & Validator
+scrapling[all]>=0.2.0
+email-validator>=2.0.0
+py3-validate-email>=1.0.5
+validate_email>=1.3
+pandas>=2.0.0
+tqdm>=4.65.0
+beautifulsoup4>=4.12.0
+phonenumbers>=8.13.0
+chardet>=5.0.0
+
+# Additional dependencies included with scrapling[all]:
+# - playwright
+# - beautifulsoup4
+# - lxml
+# - camoufox (stealth browser)
+gspread>=5.12.0
+google-auth>=2.30.0
