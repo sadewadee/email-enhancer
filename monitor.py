@@ -79,14 +79,21 @@ def prune_finished() -> None:
     with _lock:
         finished = []
         for country, proc in list(_procs.items()):
-            if proc.poll() is not None:
+            poll_result = proc.poll()
+            if poll_result is not None:
                 # Process has exited - explicitly wait to reap the zombie
                 try:
-                    proc.wait(timeout=1)
+                    exit_code = proc.wait(timeout=1)
+                    if _logger:
+                        _logger.info(f"Process for {country} (PID {proc.pid}) reaped with exit code {exit_code}")
                     finished.append(country)
                 except subprocess.TimeoutExpired:
+                    if _logger:
+                        _logger.warning(f"Timeout waiting for {country} (PID {proc.pid}), removing from tracking")
                     finished.append(country)
-                except Exception:
+                except Exception as e:
+                    if _logger:
+                        _logger.warning(f"Error reaping {country} (PID {proc.pid}): {e}")
                     finished.append(country)
 
         for country in finished:
@@ -179,17 +186,46 @@ def list_unprocessed_countries() -> List[str]:
 
 def get_running_main_instances() -> int:
     """
-    Hitung jumlah proses main.py yang sedang berjalan menggunakan ps aux.
+    Hitung jumlah proses main.py yang BENAR-BENAR SEDANG BERJALAN.
+    HANYA count proses dengan status "S" (sleeping) atau "R" (running).
+    JANGAN count zombie "Z" atau defunct "D".
+
+    Format ps aux:
+    USER PID %CPU %MEM VSZ RSS TT STAT STARTED TIME COMMAND
     """
     try:
         res = subprocess.run(["ps", "aux"], capture_output=True, text=True, check=False)
         lines = res.stdout.splitlines()
         count = 0
+
         for line in lines:
-            if "main.py" in line and ("python " in line or "python3 " in line):
+            # Skip jika tidak ada main.py
+            if "main.py" not in line or ("python " not in line and "python3 " not in line):
+                continue
+
+            # Parse status field (field ke-7, index 7)
+            parts = line.split()
+            if len(parts) < 8:
+                continue
+
+            status = parts[7]  # STAT field
+
+            # HANYA count proses yang AKTIF
+            # S = interruptible sleep
+            # R = running
+            # T = stopped
+            # Jangan count:
+            # Z = zombie
+            # D = uninterruptible sleep (disk I/O wait)
+            # X = dead
+            if status in ['S', 'R', 'Ss', 'Rs', 'S+', 'R+']:
                 count += 1
+                _logger.debug(f"Active main.py process detected: {line[:120]}")
+
         return count
-    except Exception:
+    except Exception as e:
+        if _logger:
+            _logger.warning(f"Error counting main.py instances: {e}")
         return 0
 
 
@@ -279,13 +315,25 @@ def monitor_loop():
     try:
         while True:
             try:
+                # AGGRESSIVE ZOMBIE REAPING: Reap any orphaned processes
+                # This is a safety net against missed signals
+                try:
+                    while True:
+                        pid, status = os.waitpid(-1, os.WNOHANG)
+                        if pid == 0:
+                            break
+                        if _logger:
+                            _logger.info(f"🧟 Reaped orphaned process (PID {pid}, status {status >> 8}) in monitor loop")
+                except ChildProcessError:
+                    pass  # No more children to reap
+
                 unprocessed = list_unprocessed_countries()
                 running_ps = get_running_countries()
                 running_internal = get_internal_running_countries()
                 running = running_ps | running_internal
 
-                # Gunakan angka terbesar agar tidak undercount
-                total_running = max(get_running_main_instances(), get_internal_running_count())
+                # HANYA gunakan internal count (ps aux bisa salah hitung zombie)
+                total_running = get_internal_running_count()
 
                 # Hindari meluncurkan negara yang sudah sedang diproses
                 candidates = [c for c in unprocessed if c not in running]
