@@ -317,7 +317,7 @@ class CSVProcessor:
     Handles parallel processing of CSV files containing URLs for contact extraction.
     """
 
-    def __init__(self, max_workers: int = 5, timeout: int = 30, block_images: bool = False, disable_resources: bool = False, network_idle: bool = True, cf_wait_timeout: int = 60, skip_on_challenge: bool = False, proxy_file: str = "proxy.txt", max_concurrent_browsers: int = None):
+    def __init__(self, max_workers: int = 5, timeout: int = 30, block_images: bool = False, disable_resources: bool = False, network_idle: bool = True, cf_wait_timeout: int = 60, skip_on_challenge: bool = False, proxy_file: str = "proxy.txt", max_concurrent_browsers: int = None, normal_budget: int = 60, challenge_budget: int = 120, dead_site_budget: int = 20, min_retry_threshold: int = 5):
         """
         Initialize CSV processor.
 
@@ -331,6 +331,10 @@ class CSVProcessor:
             skip_on_challenge: Skip immediately when Cloudflare challenge detected
             proxy_file: Path to proxy file for automatic proxy detection
             max_concurrent_browsers: Maximum concurrent browser instances (defaults to max_workers)
+            normal_budget: Budget for normal sites in seconds (default: 60)
+            challenge_budget: Budget for Cloudflare/challenge sites in seconds (default: 120)
+            dead_site_budget: Budget for dead sites in seconds (default: 20)
+            min_retry_threshold: Minimum remaining budget to attempt retry in seconds (default: 5)
         """
         self.max_workers = max_workers
         self.timeout = timeout
@@ -348,7 +352,11 @@ class CSVProcessor:
             skip_on_challenge=skip_on_challenge,
             proxy_file=proxy_file,
             static_first=False,
-            max_concurrent_browsers=max_concurrent_browsers
+            max_concurrent_browsers=max_concurrent_browsers,
+            normal_budget=normal_budget,
+            challenge_budget=challenge_budget,
+            dead_site_budget=dead_site_budget,
+            min_retry_threshold=min_retry_threshold
         )
         self.extractor = ContactExtractor()
         self.validator = EmailValidator(

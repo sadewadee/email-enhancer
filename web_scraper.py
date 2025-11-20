@@ -718,7 +718,11 @@ class WebScraper:
                  cf_wait_timeout: int = 60,
                  skip_on_challenge: bool = False,
                  proxy_file: str = "proxy.txt",
-                 max_concurrent_browsers: int = 3):
+                 max_concurrent_browsers: int = 3,
+                 normal_budget: int = 60,
+                 challenge_budget: int = 120,
+                 dead_site_budget: int = 20,
+                 min_retry_threshold: int = 5):
         """
         Initialize the web scraper.
 
@@ -734,6 +738,10 @@ class WebScraper:
             skip_on_challenge (bool): Skip URLs with detected challenges
             proxy_file (str): Path to proxy file (default: proxy.txt)
             max_concurrent_browsers (int): Maximum concurrent browser instances to prevent crashes
+            normal_budget (int): Budget for normal sites in seconds (default: 60)
+            challenge_budget (int): Budget for Cloudflare/challenge sites in seconds (default: 120)
+            dead_site_budget (int): Budget for dead sites in seconds (default: 20)
+            min_retry_threshold (int): Minimum remaining budget to attempt retry in seconds (default: 5)
         """
         self.headless = headless
         self.solve_cloudflare = solve_cloudflare
@@ -746,6 +754,12 @@ class WebScraper:
         self.cf_wait_timeout = cf_wait_timeout
         # If True, skip early when a Cloudflare challenge is detected
         self.skip_on_challenge = skip_on_challenge
+
+        # Budget configuration for adaptive time management
+        self.normal_budget = normal_budget
+        self.challenge_budget = challenge_budget
+        self.dead_site_budget = dead_site_budget
+        self.min_retry_threshold = min_retry_threshold
 
         # Initialize proxy manager
         self.proxy_manager = ProxyManager(proxy_file)
@@ -1774,11 +1788,11 @@ class WebScraper:
             # ===== ADAPTIVE BUDGET CALCULATION =====
             # Set total_budget based on error type for optimal time allocation
             if detection['reason'] in ['CF_wait_exceeded', 'CF_challenge', 'CF_detected_content', 'explicit_proxy_flag']:
-                total_budget = 120  # Challenge websites need more time
+                total_budget = self.challenge_budget  # Challenge websites need more time
             elif detection['reason'] in ['connection_refused', 'dns_error', 'invalid_url']:
-                total_budget = 20   # Dead sites should fail fast
+                total_budget = self.dead_site_budget   # Dead sites should fail fast
             else:
-                total_budget = 60   # Normal websites (timeouts, 403, 429, etc)
+                total_budget = self.normal_budget   # Normal websites (timeouts, 403, 429, etc)
 
             self.logger.debug(f"⏱️  Adaptive budget for {detection['reason']}: {total_budget}s")
 
@@ -1811,7 +1825,7 @@ class WebScraper:
                 elapsed = time.time() - start_time
                 remaining = total_budget - elapsed
 
-                if remaining < 10:
+                if remaining < self.min_retry_threshold:
                     result['error'] = 'insufficient_budget_for_proxy'
                     result['load_time'] = time.time() - start_time
                     break

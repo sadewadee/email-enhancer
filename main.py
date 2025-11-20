@@ -50,7 +50,11 @@ class EmailScraperValidator:
             cf_wait_timeout=self.config.get('cf_wait_timeout', 30),
             skip_on_challenge=self.config.get('skip_on_challenge', False),
             proxy_file=self.config.get('proxy_file', 'proxy.txt'),
-            max_concurrent_browsers=self.config['max_workers']
+            max_concurrent_browsers=self.config['max_workers'],
+            normal_budget=self.config.get('normal_budget', 60),
+            challenge_budget=self.config.get('challenge_budget', 120),
+            dead_site_budget=self.config.get('dead_site_budget', 20),
+            min_retry_threshold=self.config.get('min_retry_threshold', 5)
         )
         self.post_processor = PostProcessor()
 
@@ -552,7 +556,12 @@ def create_config_from_args(args) -> Dict[str, Any]:
         # Network idle control for Cloudflare wait page/long-polling sites
         'network_idle': False if getattr(args, 'no_network_idle', False) else True,
         # Proxy configuration
-        'proxy_file': getattr(args, 'proxy_file', 'proxy.txt')
+        'proxy_file': getattr(args, 'proxy_file', 'proxy.txt'),
+        # Budget configuration for time-based retry management
+        'normal_budget': getattr(args, 'normal_budget', 60),
+        'challenge_budget': getattr(args, 'challenge_budget', 120),
+        'dead_site_budget': getattr(args, 'dead_site_budget', 20),
+        'min_retry_threshold': getattr(args, 'min_retry_threshold', 5)
     }
     return config
 
@@ -624,6 +633,12 @@ Examples:
         p.add_argument('--log-level', choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'], default='INFO', help='Log level (default: INFO)')
         # Proxy configuration
         p.add_argument('--proxy-file', default='proxy.txt', help='Path to proxy file for automatic proxy detection (default: proxy.txt)')
+
+        # Budget configuration for time-based retry management
+        p.add_argument('--normal-budget', type=int, default=60, help='Budget for normal sites in seconds (default: 60)')
+        p.add_argument('--challenge-budget', type=int, default=120, help='Budget for Cloudflare/challenge sites in seconds (default: 120)')
+        p.add_argument('--dead-site-budget', type=int, default=20, help='Budget for dead sites in seconds (default: 20)')
+        p.add_argument('--min-retry-threshold', type=int, default=5, help='Minimum remaining budget to attempt retry in seconds (default: 5)')
 
     args = parser.parse_args()
 
