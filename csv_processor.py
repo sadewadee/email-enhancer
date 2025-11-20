@@ -548,14 +548,19 @@ class CSVProcessor:
                 raise ValueError(f"No URL column found. Expected one of: url, website, link")
 
             # AUTO-SELECT only useful columns (ignore all the bloat)
+            # Supports both Model 1 (standard) and Model 2 (Google Maps export) formats
             useful_columns = ['title', 'name', 'category', 'address', 'phone', 'emails', 'email',
-                            'facebook', 'instagram', 'linkedin', 'twitter', 'whatsapp']
+                            'facebook', 'instagram', 'linkedin', 'twitter', 'whatsapp', 'website',
+                            'complete_address']
 
             # Select columns that exist in the CSV
+            # Includes both Model 1 (direct columns) and Model 2 (Google Maps) column names
             mandatory_cols_for_select = [
                 'name', 'street', 'city', 'country_code', 'url',
                 'phone_number', 'google_business_categories',
-                'facebook', 'instagram', 'email'
+                'facebook', 'instagram', 'email',
+                # Model 2 (Google Maps export) columns
+                'title', 'website', 'phone', 'category', 'complete_address', 'emails'
             ]
             select_set = set([url_column])
             for col in columns_df.columns:
@@ -700,8 +705,33 @@ class CSVProcessor:
                             original_row = result.get('original_data', {}) or {}
 
                             def get_value(key):
+                                """
+                                Get value from original row with alias support.
+                                Supports both Model 1 (standard) and Model 2 (Google Maps export) CSV formats.
+                                """
+                                # Define aliases for each key to support both CSV models
+                                # Model 1: Direct column names
+                                # Model 2: Google Maps export format with different naming
+                                aliases = {
+                                    'name': ['name', 'title', 'business_name', 'company_name'],
+                                    'phone_number': ['phone_number', 'phone', 'phone_mobile'],
+                                    'google_business_categories': ['google_business_categories', 'category', 'categories', 'type'],
+                                    'email': ['email', 'emails', 'email_address'],
+                                }
+
+                                # Try primary key first
                                 val = original_row.get(key, '')
-                                return '' if pd.isna(val) else str(val)
+                                if val and not pd.isna(val):
+                                    return str(val).strip()
+
+                                # Try aliases if primary key not found
+                                if key in aliases:
+                                    for alias in aliases[key]:
+                                        val = original_row.get(alias, '')
+                                        if val and not pd.isna(val):
+                                            return str(val).strip()
+
+                                return ''
 
                             output_row = {
                                 'No': str(processed_count + 1),
@@ -736,6 +766,33 @@ class CSVProcessor:
                                 'validated_emails_count': validated_emails_count,
                                 'validated_whatsapp_count': validated_whatsapp_count,
                             }
+
+                            # ============================================================================
+                            # EXTRACT DATA FROM COMPLETE_ADDRESS JSON (Model 2: Google Maps export)
+                            # ============================================================================
+                            # For Google Maps export format, complete_address is JSON containing:
+                            # {"street": "...", "city": "...", "state": "...", "country": "...", "postal_code": "..."}
+                            # Use this to fill empty fields if they exist
+                            if 'complete_address' in original_row and original_row['complete_address']:
+                                try:
+                                    addr_str = str(original_row['complete_address']).strip()
+                                    if addr_str:
+                                        addr_data = json.loads(addr_str)
+
+                                        # Fill street if empty
+                                        if not output_row['street']:
+                                            output_row['street'] = addr_data.get('street', '')
+
+                                        # Fill city - use 'city' field, fallback to 'state'
+                                        if not output_row['city']:
+                                            output_row['city'] = addr_data.get('city') or addr_data.get('state', '')
+
+                                        # Fill country_code from 'country' field
+                                        if not output_row['country_code']:
+                                            output_row['country_code'] = addr_data.get('country', '')
+                                except (json.JSONDecodeError, ValueError, TypeError) as e:
+                                    # Log JSON parse error but continue processing
+                                    self.logger.debug(f"Failed to parse complete_address JSON for {url}: {str(e)}")
 
                             with writer_lock:
                                 writer.writerow(output_row)
