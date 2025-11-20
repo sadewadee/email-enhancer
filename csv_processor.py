@@ -598,6 +598,10 @@ class CSVProcessor:
                 'facebook', 'instagram'
             ]
 
+            # Redirect tracking columns
+            # Track if URL was redirected to different domain during scraping
+            redirect_cols = ['final_url', 'was_redirected']
+
             # Contact and validation columns added by scraper
             # Note: 'email' from input CSV is placed after 'whatsapp'
             contact_cols = ['emails', 'phones', 'whatsapp', 'email', 'validated_emails', 'validated_whatsapp']
@@ -608,8 +612,8 @@ class CSVProcessor:
                 'emails_found', 'phones_found', 'whatsapp_found', 'validated_emails_count', 'validated_whatsapp_count'
             ]
 
-            # Final header: mandatory + contacts + metrics
-            header = mandatory_cols + contact_cols + metrics_cols
+            # Final header: mandatory + redirect tracking + contacts + metrics
+            header = mandatory_cols + redirect_cols + contact_cols + metrics_cols
 
             # Open output file and write header
             csv_file = open(output_file, 'w', newline='', encoding='utf-8')
@@ -733,17 +737,27 @@ class CSVProcessor:
 
                                 return ''
 
+                            # ============================================================================
+                            # PREPARE OUTPUT ROW WITH REDIRECT TRACKING
+                            # ============================================================================
+                            # Track whether URL was redirected during scraping
+                            original_url = result.get('url', '')
+                            final_url = result.get('final_url', original_url)
+                            was_redirected = 'true' if final_url and original_url and final_url != original_url else 'false'
+
                             output_row = {
                                 'No': str(processed_count + 1),
                                 'name': get_value('name'),
                                 'street': get_value('street'),
                                 'city': get_value('city'),
                                 'country_code': get_value('country_code'),
-                                'url': result.get('url', ''),
+                                'url': original_url,
                                 'phone_number': get_value('phone_number'),
                                 'google_business_categories': get_value('google_business_categories'),
                                 'facebook': get_value('facebook'),
                                 'instagram': get_value('instagram'),
+                                'final_url': final_url,
+                                'was_redirected': was_redirected,
                                 'emails': '; '.join(emails_list),
                                 'phones': '; '.join(result.get('phones', []) or []),
                                 'whatsapp': '; '.join(whatsapp_list),
