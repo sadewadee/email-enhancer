@@ -57,6 +57,7 @@ tmp*/
 *.tmp
 *.md
 !readme.md
+!CLAUDE.md
 *.txt
 
 # Local helper artifacts
