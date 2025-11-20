@@ -58,20 +58,21 @@ def detect_file_encoding(file_path: str, sample_size: int = 100000) -> str:
         pass
 
     # Fallback: Try common encodings in order
+    # Validate entire file, not just first 10 lines (fixes deep encoding errors)
     fallback_encodings = ['utf-8', 'latin-1', 'cp1252', 'iso-8859-1', 'utf-16']
 
     for encoding in fallback_encodings:
         try:
             with open(file_path, 'r', encoding=encoding) as f:
-                # Try to read first few lines
-                for _ in range(10):
-                    f.readline()
+                # Read ENTIRE file to validate encoding works throughout
+                # This catches invalid bytes that appear later in the file
+                f.read()
             return encoding
         except (UnicodeDecodeError, LookupError):
             continue
 
-    # Final fallback
-    return 'utf-8'
+    # Final fallback: latin-1 is most permissive (accepts all bytes 0x00-0xFF)
+    return 'latin-1'
 
 # ============================================================================
 # INTELLIGENT CHUNK SIZE CONFIGURATION FOR LARGE FILES
@@ -517,7 +518,13 @@ class CSVProcessor:
             # Read header only to validate columns without loading full data
             # IMPORTANT: Use dtype=str to preserve phone_number format (with '+' prefix)
             # and prevent pandas from auto-converting to INT
-            columns_df = pd.read_csv(input_file, nrows=0, dtype=str, encoding=detected_encoding)
+            try:
+                columns_df = pd.read_csv(input_file, nrows=0, dtype=str, encoding=detected_encoding)
+            except UnicodeDecodeError:
+                # Fallback: detected encoding failed, retry with latin-1
+                self.logger.warning(f"⚠️ Detected encoding '{detected_encoding}' failed during header read. Falling back to latin-1")
+                detected_encoding = 'latin-1'
+                columns_df = pd.read_csv(input_file, nrows=0, dtype=str, encoding=detected_encoding)
 
             # ============================================================================
             # AUTO-CALCULATE OPTIMAL CHUNKSIZE (if not explicitly provided)
@@ -581,15 +588,29 @@ class CSVProcessor:
 
             # Determine total rows with non-empty URL for progress bar
             total_urls = 0
-            with open(input_file, 'r', encoding=detected_encoding, newline='') as f_in:
-                reader = csv.DictReader(f_in)
-                for r in reader:
-                    u = (r.get(url_column) or '').strip()
-                    if u:
-                        total_urls += 1
-                    # Apply limit if specified
-                    if limit_rows and total_urls >= limit_rows:
-                        break
+            try:
+                with open(input_file, 'r', encoding=detected_encoding, newline='') as f_in:
+                    reader = csv.DictReader(f_in)
+                    for r in reader:
+                        u = (r.get(url_column) or '').strip()
+                        if u:
+                            total_urls += 1
+                        # Apply limit if specified
+                        if limit_rows and total_urls >= limit_rows:
+                            break
+            except UnicodeDecodeError:
+                # Fallback: detected encoding failed, retry with latin-1
+                self.logger.warning(f"⚠️ Detected encoding '{detected_encoding}' failed at URL count. Falling back to latin-1")
+                detected_encoding = 'latin-1'
+                with open(input_file, 'r', encoding=detected_encoding, newline='') as f_in:
+                    reader = csv.DictReader(f_in)
+                    for r in reader:
+                        u = (r.get(url_column) or '').strip()
+                        if u:
+                            total_urls += 1
+                        # Apply limit if specified
+                        if limit_rows and total_urls >= limit_rows:
+                            break
 
             if limit_rows:
                 self.logger.debug(f"🔬 Testing mode: Processing limited to {total_urls} URLs (--limit {limit_rows})")
@@ -859,10 +880,19 @@ class CSVProcessor:
                     # Apply limit_rows if specified
                     # IMPORTANT: Use dtype=str to preserve phone_number format (with '+' prefix)
                     # and prevent pandas from auto-converting numeric strings to INT
-                    if input_chunksize and input_chunksize > 0:
-                        chunk_iter = pd.read_csv(input_file, chunksize=input_chunksize, usecols=select_columns, nrows=limit_rows, dtype=str, encoding=detected_encoding)
-                    else:
-                        chunk_iter = [pd.read_csv(input_file, usecols=select_columns, nrows=limit_rows, dtype=str, encoding=detected_encoding)]
+                    try:
+                        if input_chunksize and input_chunksize > 0:
+                            chunk_iter = pd.read_csv(input_file, chunksize=input_chunksize, usecols=select_columns, nrows=limit_rows, dtype=str, encoding=detected_encoding)
+                        else:
+                            chunk_iter = [pd.read_csv(input_file, usecols=select_columns, nrows=limit_rows, dtype=str, encoding=detected_encoding)]
+                    except UnicodeDecodeError:
+                        # Fallback: detected encoding failed, retry with latin-1
+                        self.logger.warning(f"⚠️ Detected encoding '{detected_encoding}' failed during CSV read. Falling back to latin-1")
+                        detected_encoding = 'latin-1'
+                        if input_chunksize and input_chunksize > 0:
+                            chunk_iter = pd.read_csv(input_file, chunksize=input_chunksize, usecols=select_columns, nrows=limit_rows, dtype=str, encoding=detected_encoding)
+                        else:
+                            chunk_iter = [pd.read_csv(input_file, usecols=select_columns, nrows=limit_rows, dtype=str, encoding=detected_encoding)]
 
                     # Track total processed for limit enforcement
                     total_processed_so_far = 0
