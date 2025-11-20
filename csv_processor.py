@@ -18,11 +18,85 @@ import queue
 import json
 from datetime import datetime
 from pathlib import Path
+import chardet
+import psutil
 
 from web_scraper import WebScraper
 from contact_extractor import ContactExtractor
 from email_validation import EmailValidator
 from whatsapp_validator import WhatsAppValidator
+from url_cleaner import URLCleaner
+
+# ============================================================================
+# INTELLIGENT CHUNK SIZE CONFIGURATION FOR LARGE FILES
+# ============================================================================
+# Accounts for concurrent browser instances which consume significant RAM
+# Each browser instance: ~300MB
+# Formula: Available_RAM = Total_RAM - System_Overhead - Browser_RAM
+#
+# Examples:
+# - System with 8GB RAM, 5 workers (1.5GB browsers): Can handle ~6.5GB chunks
+# - System with 4GB RAM, 3 workers (0.9GB browsers): Can handle ~3GB chunks
+# - System with 16GB RAM, 20 workers (6GB browsers): Can handle ~9GB chunks
+# ============================================================================
+
+def calculate_optimal_chunksize(max_workers: int, file_size_mb: int,
+                               system_ram_gb: float = None) -> int:
+    """
+    Calculate optimal CSV chunk size based on system resources and worker count.
+
+    Args:
+        max_workers: Number of concurrent browser instances
+        file_size_mb: Size of input CSV file in MB
+        system_ram_gb: Available system RAM (auto-detect if None)
+
+    Returns:
+        Optimal chunk size in rows (or 0 for all-at-once if file is small)
+    """
+    # Auto-detect available system RAM if not provided
+    if system_ram_gb is None:
+        try:
+            available_ram_mb = psutil.virtual_memory().available / (1024 * 1024)
+            system_ram_gb = available_ram_mb / 1024
+        except:
+            system_ram_gb = 4  # Conservative fallback
+
+    # Constants
+    BROWSER_RAM_MB = 300  # Average per browser instance
+    SYSTEM_OVERHEAD_MB = 500  # OS and misc processes
+    SAFETY_MARGIN = 0.7  # Use only 70% of calculated available RAM
+
+    # Calculate RAM reserved for browsers
+    browser_ram_mb = max_workers * BROWSER_RAM_MB
+
+    # Calculate available RAM for CSV processing
+    system_ram_mb = system_ram_gb * 1024
+    available_for_csv_mb = (system_ram_mb - SYSTEM_OVERHEAD_MB - browser_ram_mb) * SAFETY_MARGIN
+
+    # If file is small enough to fit entirely in available RAM, no chunking needed
+    if file_size_mb <= available_for_csv_mb:
+        logging.debug(f"💚 File ({file_size_mb}MB) fits in available RAM ({available_for_csv_mb:.0f}MB), no chunking needed")
+        return 0  # Signal: load all-at-once
+
+    # For large files, calculate optimal chunk size
+    # Assume average row size ~5KB for typical CSV with contact data
+    ESTIMATED_ROW_SIZE_KB = 5
+
+    # Create chunks of ~50MB each (or smaller if RAM constrained)
+    TARGET_CHUNK_SIZE_MB = min(50, available_for_csv_mb / 4)
+    chunk_rows = int((TARGET_CHUNK_SIZE_MB * 1024) / ESTIMATED_ROW_SIZE_KB)
+
+    # Minimum chunk size: 1000 rows (for processing efficiency)
+    # Maximum chunk size: 100000 rows (to prevent any single chunk overflow)
+    optimal_chunk = max(1000, min(100000, chunk_rows))
+
+    logging.info(
+        f"📊 Chunk calculation: file={file_size_mb}MB, workers={max_workers}, "
+        f"browser_ram={browser_ram_mb}MB, available_for_csv={available_for_csv_mb:.0f}MB → "
+        f"chunk_size={optimal_chunk} rows (~{(optimal_chunk * ESTIMATED_ROW_SIZE_KB) / 1024:.0f}MB)"
+    )
+
+    return optimal_chunk
 
 
 # Completion marker utilities
@@ -102,7 +176,7 @@ def read_completion_marker(csv_path: str) -> Optional[Dict[str, Any]]:
 
 class ProcessingRateCalculator:
     """Enhanced processing rate calculator with multiple metrics"""
-    
+
     def __init__(self, window_minutes=3, smoothing_factor=0.2):
         self.completion_times = deque()
         self.window_secs = window_minutes * 60  # 3 minutes vs old 10
@@ -112,7 +186,7 @@ class ProcessingRateCalculator:
         self.total_processed = 0
         self.recent_rates = deque(maxlen=10)
         self.last_rate_time = time.time()
-        
+
     def add_completion(self):
         now = time.time()
         self.completion_times.append(now)
@@ -148,10 +222,10 @@ class ProcessingRateCalculator:
             )
 
         self.last_rate_time = now
-    
+
     def get_current_rate(self) -> float:
         return self.smoothed_rate
-    
+
     def get_instantaneous_rate(self, last_seconds=30) -> float:
         """Calculate instantaneous rate based on recent completions."""
         now = time.time()
@@ -170,14 +244,14 @@ class ProcessingRateCalculator:
             return self.get_current_rate()
 
         return 0.0
-    
+
     def get_eta_minutes(self, total_urls: int) -> Optional[float]:
         if total_urls <= self.total_processed:
             return 0.0
         remaining = total_urls - self.total_processed
         current_rate = self.get_current_rate()
         return remaining / current_rate if current_rate > 0 else None
-    
+
     def get_eta_formatted(self, total_urls: int) -> str:
         eta = self.get_eta_minutes(total_urls)
         if eta is None:
@@ -279,10 +353,35 @@ class CSVProcessor:
         start_time = time.time()
 
         try:
+            # ========================================================================
+            # STEP 1: Clean URL before validation
+            # ========================================================================
+            # Handles:
+            # - Google redirect URLs (/url?q=...)
+            # - Tracking parameters (utm_*, opi, ved, etc)
+            # - URL encoding issues
+            # - Protocol normalization
+            if url:
+                cleaned_url = URLCleaner.clean_url(url, aggressive=False)
+                if cleaned_url:
+                    if cleaned_url != url:
+                        self.logger.debug(f"URL cleaned: '{url}' → '{cleaned_url}'")
+                    url = cleaned_url
+                else:
+                    result['error'] = 'Invalid URL format after cleanup'
+                    self.logger.debug(f"Skipping invalid URL (failed cleanup): {url}")
+                    return result
+
+            # ========================================================================
+            # STEP 2: Validate cleaned URL
+            # ========================================================================
             if not url or not self._is_valid_url(url):
                 result['error'] = 'Invalid URL format'
                 self.logger.debug(f"Skipping invalid URL: {url}")
                 return result
+
+            # Update result with cleaned URL
+            result['url'] = url
 
             # Skip social media URLs (Facebook, Instagram, LinkedIn, etc.)
             if self._is_social_url(url):
@@ -346,7 +445,7 @@ class CSVProcessor:
             input_file: Path to input CSV file
             output_file: Path to output CSV file
             batch_size: Number of URLs to process in each batch
-            input_chunksize: Number of rows to read per chunk (0 = read all at once)
+            input_chunksize: Number of rows to read per chunk (0 = auto-calculate for optimal performance)
             limit_rows: Optional limit on number of rows to process (for testing)
 
         Returns:
@@ -356,7 +455,32 @@ class CSVProcessor:
         url_column = 'url'  # default fallback
         try:
             # Read header only to validate columns without loading full data
-            columns_df = pd.read_csv(input_file, nrows=0)
+            # IMPORTANT: Use dtype=str to preserve phone_number format (with '+' prefix)
+            # and prevent pandas from auto-converting to INT
+            columns_df = pd.read_csv(input_file, nrows=0, dtype=str)
+
+            # ============================================================================
+            # AUTO-CALCULATE OPTIMAL CHUNKSIZE (if not explicitly provided)
+            # ============================================================================
+            # This considers:
+            # 1. File size (larger files need smaller chunks)
+            # 2. Number of workers/browser instances (more workers = less RAM per chunk)
+            # 3. Available system RAM
+            # ============================================================================
+            file_size_mb = os.path.getsize(input_file) / (1024 * 1024)  # Calculate once, use throughout
+
+            if input_chunksize == 0:
+                calculated_chunksize = calculate_optimal_chunksize(
+                    max_workers=self.max_workers,
+                    file_size_mb=file_size_mb
+                )
+                if calculated_chunksize > 0:
+                    input_chunksize = calculated_chunksize
+                    self.logger.info(f"🔧 Auto-enabled chunking: chunk_size={input_chunksize} rows (~{(input_chunksize * 5) / 1024:.0f}MB per chunk)")
+                else:
+                    self.logger.info(f"✅ File size ({file_size_mb:.0f}MB) small enough for all-at-once loading")
+            else:
+                self.logger.debug(f"🔧 Using explicit chunk_size: {input_chunksize} rows")
 
             # AUTO-DETECT URL column: look for 'url', 'website', 'link', etc.
             detected_url_column = None
@@ -563,7 +687,12 @@ class CSVProcessor:
 
                             with writer_lock:
                                 writer.writerow(output_row)
-                                if processed_count % 10 == 0:
+                                # Intelligent flush frequency: flush more often for large files
+                                # - Every 10 rows for files < 10MB (default)
+                                # - Every 50 rows for files 10-100MB (less overhead)
+                                # - Every 100 rows for files > 100MB (optimal balance)
+                                flush_interval = 10 if file_size_mb < 10 else (50 if file_size_mb < 100 else 100)
+                                if processed_count % flush_interval == 0:
                                     csv_file.flush()
 
                             with progress_lock:
@@ -597,10 +726,12 @@ class CSVProcessor:
                     # Build chunk iterator (streaming if input_chunksize > 0)
                     # Apply select_columns filter to reduce memory usage
                     # Apply limit_rows if specified
+                    # IMPORTANT: Use dtype=str to preserve phone_number format (with '+' prefix)
+                    # and prevent pandas from auto-converting numeric strings to INT
                     if input_chunksize and input_chunksize > 0:
-                        chunk_iter = pd.read_csv(input_file, chunksize=input_chunksize, usecols=select_columns, nrows=limit_rows)
+                        chunk_iter = pd.read_csv(input_file, chunksize=input_chunksize, usecols=select_columns, nrows=limit_rows, dtype=str)
                     else:
-                        chunk_iter = [pd.read_csv(input_file, usecols=select_columns, nrows=limit_rows)]
+                        chunk_iter = [pd.read_csv(input_file, usecols=select_columns, nrows=limit_rows, dtype=str)]
 
                     # Track total processed for limit enforcement
                     total_processed_so_far = 0

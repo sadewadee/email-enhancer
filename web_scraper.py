@@ -22,6 +22,9 @@ import threading
 # Import proxy manager
 from proxy_manager import ProxyManager
 
+# Import URL cleaner
+from url_cleaner import URLCleaner
+
 
 
 import random
@@ -1849,6 +1852,29 @@ class WebScraper:
         Returns:
             Dict: Comprehensive contact information
         """
+        # ====================================================================
+        # STEP 1: Clean URL before scraping
+        # ====================================================================
+        # Handles Google redirects, tracking params, encoding issues, etc.
+        original_url = url
+        cleaned_url = URLCleaner.clean_url(url, aggressive=False)
+
+        if not cleaned_url:
+            return {
+                'website': original_url,
+                'emails': [],
+                'phones': [],
+                'whatsapp': [],
+                'pages_scraped': [],
+                'status': 'failed',
+                'error': f'Invalid URL format (failed cleanup): {original_url}'
+            }
+
+        if cleaned_url != original_url:
+            self.logger.debug(f"URL cleaned before scraping: '{original_url}' → '{cleaned_url}'")
+
+        url = cleaned_url
+
         result = {
             'website': url,
             'emails': [],
