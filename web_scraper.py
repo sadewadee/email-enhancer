@@ -25,6 +25,9 @@ from proxy_manager import ProxyManager
 # Import URL cleaner
 from url_cleaner import URLCleaner
 
+# Import SSL error handler
+from ssl_error_handler import SSLErrorHandler
+
 
 
 import random
@@ -1211,6 +1214,30 @@ class WebScraper:
 
             return result
         except (HTTPError, URLError) as e:
+            # ====================================================================
+            # SSL-SPECIFIC ERROR HANDLING
+            # ====================================================================
+            if SSLErrorHandler.is_ssl_error(e):
+                SSLErrorHandler.log_ssl_error(e, url, context="static_fetch")
+                strategy = SSLErrorHandler.get_recovery_strategy(e, url)
+                self.logger.debug(f"SSL error recovery strategy: {strategy}")
+
+                if strategy['should_skip']:
+                    # Return explicit error result for skipped URLs
+                    return {
+                        'status': 0,
+                        'html': '',
+                        'url': url,
+                        'final_url': url,
+                        'error': f"SSL Error ({strategy['error_type']}): {strategy['reason']}",
+                        'load_time': time.time() - start_time,
+                        'page_title': '',
+                        'meta_description': '',
+                        'is_contact_page': False
+                    }
+                # For retryable SSL errors, return None to fallback to dynamic fetch
+                # Dynamic fetch (Playwright) might handle SSL better
+                return None
             # Network or HTTP error on static path -> defer to dynamic
             return None
         except Exception:
