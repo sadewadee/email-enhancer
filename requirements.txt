@@ -8,6 +8,7 @@ tqdm>=4.65.0
 beautifulsoup4>=4.12.0
 phonenumbers>=8.13.0
 chardet>=5.0.0
+psutil>=5.9.0
 
 # Additional dependencies included with scrapling[all]:
 # - playwright
