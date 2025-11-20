@@ -12,6 +12,8 @@ import gsheets_sync
 import threading
 import csv
 import re
+import signal
+import atexit
 from pathlib import Path
 from typing import List, Set, Dict
 
@@ -27,14 +29,68 @@ MAX_MAIN_INSTANCES = 3
 
 _lock = threading.Lock()
 _procs: Dict[str, subprocess.Popen] = {}
+_logger = None  # Global logger ref for signal handler
+
+
+def sigchld_handler(signum, frame):
+    """Reap zombie child processes when SIGCHLD signal received."""
+    try:
+        while True:
+            pid, status = os.waitpid(-1, os.WNOHANG)
+            if pid == 0:
+                break
+            if _logger:
+                _logger.debug(f"Child process {pid} reaped with status {status >> 8}")
+    except ChildProcessError:
+        # No more children to reap
+        pass
+    except Exception as e:
+        if _logger:
+            _logger.warning(f"Error in SIGCHLD handler: {e}")
+
+
+def cleanup_processes():
+    """Terminate all spawned processes gracefully before exit."""
+    if not _logger:
+        return
+
+    _logger.info("Cleaning up spawned processes...")
+    with _lock:
+        for country, proc in list(_procs.items()):
+            try:
+                if proc.poll() is None:  # Still running
+                    _logger.debug(f"Terminating process for {country} (PID: {proc.pid})")
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=5)
+                        _logger.debug(f"Process for {country} terminated gracefully")
+                    except subprocess.TimeoutExpired:
+                        _logger.warning(f"Timeout terminating {country}, sending SIGKILL")
+                        proc.kill()
+                        proc.wait()
+            except Exception as e:
+                _logger.error(f"Error cleaning up process for {country}: {e}")
+
+        _procs.clear()
 
 
 def prune_finished() -> None:
-    """Hapus entri proses internal yang sudah selesai."""
+    """Hapus entri proses internal yang sudah selesai dan reap zombies."""
     with _lock:
-        finished = [c for c, p in _procs.items() if p.poll() is not None]
-        for c in finished:
-            _procs.pop(c, None)
+        finished = []
+        for country, proc in list(_procs.items()):
+            if proc.poll() is not None:
+                # Process has exited - explicitly wait to reap the zombie
+                try:
+                    proc.wait(timeout=1)
+                    finished.append(country)
+                except subprocess.TimeoutExpired:
+                    finished.append(country)
+                except Exception:
+                    finished.append(country)
+
+        for country in finished:
+            _procs.pop(country, None)
 
 
 def get_internal_running_count() -> int:
@@ -182,10 +238,8 @@ def start_main_for_country(country: str, logger: logging.Logger) -> bool:
         str(input_csv),
         "--output-dir",
         str(DATA_DIR),
-        "--workers",
-        "5",  # Jumlah worker untuk main.py
         "--timeout",
-        "60",  # Request timeout in seconds
+        "120",  # Request timeout in seconds
         "--cf-wait-timeout",
         "90",  # Cloudflare challenge timeout (increased from default 60)
     ]
@@ -209,102 +263,115 @@ def start_main_for_country(country: str, logger: logging.Logger) -> bool:
 
 
 def monitor_loop():
+    global _logger
     setup_logging()
     logger = logging.getLogger("monitor")
+    _logger = logger  # Set global reference for signal handler
     ensure_dirs()
     logger.info("Memulai monitoring folder 'country' dan 'data'")
 
-    while True:
-        try:
-            unprocessed = list_unprocessed_countries()
-            running_ps = get_running_countries()
-            running_internal = get_internal_running_countries()
-            running = running_ps | running_internal
+    # Register signal handler to reap zombie processes
+    signal.signal(signal.SIGCHLD, sigchld_handler)
 
-            # Gunakan angka terbesar agar tidak undercount
-            total_running = max(get_running_main_instances(), get_internal_running_count())
+    # Register cleanup function to run on normal exit
+    atexit.register(cleanup_processes)
 
-            # Hindari meluncurkan negara yang sudah sedang diproses
-            candidates = [c for c in unprocessed if c not in running]
-
-            logger.info(
-                f"Status: belum diproses={len(unprocessed)}, kandidat_start={len(candidates)}, "
-                f"sedang_berjalan={total_running}"
-            )
-
-            # Hitung slot proses yang boleh diluncurkan kali ini
-            slots = max(0, MAX_MAIN_INSTANCES - total_running)
-            if slots == 0:
-                logger.info(f"Maksimal {MAX_MAIN_INSTANCES} main.py berjalan. Menunggu...")
-            else:
-                # Luncurkan maksimal 'slots' negara saja pada iterasi ini
-                for country in candidates[:slots]:
-                    started = start_main_for_country(country, logger)
-                    if started:
-                        logger.info(f"Diluncurkan proses untuk negara: {country}")
-                    else:
-                        logger.info(f"Melewati negara: {country} (file belum siap/invalid)")
-
-            # Hint untuk status selesai semua input saat ini
-            if not unprocessed and total_running == 0:
-                logger.info("Tidak ada file baru di 'country' dan tidak ada proses berjalan.")
-
+    try:
+        while True:
             try:
-                spreadsheet_id = os.environ.get("SPREADSHEET_ID", "1aL_7HyyGpTKogW0nniiOq0n2w9O7K77fTBAEVADnItY")
-                if spreadsheet_id:
-                    did_import = False
-                    last_sid = None
-                    for csv_file in DATA_DIR.glob("*.csv"):
-                        # Check for completion marker - skip if not present
-                        marker_file = csv_file.with_suffix('.complete')
-                        if not marker_file.exists():
-                            logger.debug(f"⏭️  Skip {csv_file.name} - no completion marker (still processing or failed)")
-                            continue
+                unprocessed = list_unprocessed_countries()
+                running_ps = get_running_countries()
+                running_internal = get_internal_running_countries()
+                running = running_ps | running_internal
 
-                        # Read marker metadata for logging
-                        try:
-                            import json
-                            with open(marker_file, 'r') as f:
-                                marker_data = json.load(f)
-                            status = marker_data.get('status', 'unknown')
-                            rows = marker_data.get('total_rows', 0)
-                            logger.info(f"📋 Found completed file: {csv_file.name} (status={status}, rows={rows})")
-                        except Exception:
-                            # Marker exists but couldn't read - proceed anyway
-                            logger.warning(f"⚠️  Marker exists but unreadable: {marker_file.name}")
+                # Gunakan angka terbesar agar tidak undercount
+                total_running = max(get_running_main_instances(), get_internal_running_count())
 
-                        title = csv_file.stem
-                        if title.endswith('_processed'):
-                            title = title[:-10]
-                        try:
-                            ss = gsheets_sync._get_client().open_by_key(spreadsheet_id)
-                            try:
-                                ss.worksheet(title)
-                                logger.debug(f"⏭️  Sheet '{title}' already exists, skipping")
-                                continue
-                            except Exception:
-                                pass
-                            last_sid = gsheets_sync.sync_csv_to_sheet(str(csv_file), spreadsheet_id, title, replace=True)
-                            did_import = True
-                            logger.info(f"✅ Sinkronisasi ke Google Sheets selesai: {csv_file} -> tab '{title}'")
+                # Hindari meluncurkan negara yang sudah sedang diproses
+                candidates = [c for c in unprocessed if c not in running]
 
-                            # Optional: Remove marker after successful upload to allow re-processing
-                            # Uncomment the line below if you want automatic marker cleanup
-                            # marker_file.unlink()
+                logger.info(
+                    f"Status: belum diproses={len(unprocessed)}, kandidat_start={len(candidates)}, "
+                    f"sedang_berjalan={total_running}"
+                )
 
-                        except Exception as e:
-                            logger.error(f"❌ Sinkronisasi ke Google Sheets gagal untuk {csv_file}: {e}")
-                    if did_import and last_sid:
-                        gsheets_sync.build_global_summary(last_sid, "Summary")
+                # Hitung slot proses yang boleh diluncurkan kali ini
+                slots = max(0, MAX_MAIN_INSTANCES - total_running)
+                if slots == 0:
+                    logger.info(f"Maksimal {MAX_MAIN_INSTANCES} main.py berjalan. Menunggu...")
                 else:
-                    logger.debug("SPREADSHEET_ID tidak diset; melewati sinkronisasi Google Sheets")
+                    # Luncurkan maksimal 'slots' negara saja pada iterasi ini
+                    for country in candidates[:slots]:
+                        started = start_main_for_country(country, logger)
+                        if started:
+                            logger.info(f"Diluncurkan proses untuk negara: {country}")
+                        else:
+                            logger.info(f"Melewati negara: {country} (file belum siap/invalid)")
+
+                # Hint untuk status selesai semua input saat ini
+                if not unprocessed and total_running == 0:
+                    logger.info("Tidak ada file baru di 'country' dan tidak ada proses berjalan.")
+
+                try:
+                    spreadsheet_id = os.environ.get("SPREADSHEET_ID", "1aL_7HyyGpTKogW0nniiOq0n2w9O7K77fTBAEVADnItY")
+                    if spreadsheet_id:
+                        did_import = False
+                        last_sid = None
+                        for csv_file in DATA_DIR.glob("*.csv"):
+                            # Check for completion marker - skip if not present
+                            marker_file = csv_file.with_suffix('.complete')
+                            if not marker_file.exists():
+                                logger.debug(f"⏭️  Skip {csv_file.name} - no completion marker (still processing or failed)")
+                                continue
+
+                            # Read marker metadata for logging
+                            try:
+                                import json
+                                with open(marker_file, 'r') as f:
+                                    marker_data = json.load(f)
+                                status = marker_data.get('status', 'unknown')
+                                rows = marker_data.get('total_rows', 0)
+                                logger.info(f"📋 Found completed file: {csv_file.name} (status={status}, rows={rows})")
+                            except Exception:
+                                # Marker exists but couldn't read - proceed anyway
+                                logger.warning(f"⚠️  Marker exists but unreadable: {marker_file.name}")
+
+                            title = csv_file.stem
+                            if title.endswith('_processed'):
+                                title = title[:-10]
+                            try:
+                                ss = gsheets_sync._get_client().open_by_key(spreadsheet_id)
+                                try:
+                                    ss.worksheet(title)
+                                    logger.debug(f"⏭️  Sheet '{title}' already exists, skipping")
+                                    continue
+                                except Exception:
+                                    pass
+                                last_sid = gsheets_sync.sync_csv_to_sheet(str(csv_file), spreadsheet_id, title, replace=True)
+                                did_import = True
+                                logger.info(f"✅ Sinkronisasi ke Google Sheets selesai: {csv_file} -> tab '{title}'")
+
+                                # Optional: Remove marker after successful upload to allow re-processing
+                                # Uncomment the line below if you want automatic marker cleanup
+                                # marker_file.unlink()
+
+                            except Exception as e:
+                                logger.error(f"❌ Sinkronisasi ke Google Sheets gagal untuk {csv_file}: {e}")
+                        if did_import and last_sid:
+                            gsheets_sync.build_global_summary(last_sid, "Summary")
+                    else:
+                        logger.debug("SPREADSHEET_ID tidak diset; melewati sinkronisasi Google Sheets")
+                except Exception as e:
+                    logger.error(f"Kesalahan sinkronisasi Google Sheets: {e}")
+
             except Exception as e:
-                logger.error(f"Kesalahan sinkronisasi Google Sheets: {e}")
+                logging.getLogger("monitor").error(f"Kesalahan loop monitoring: {e}")
 
-        except Exception as e:
-            logging.getLogger("monitor").error(f"Kesalahan loop monitoring: {e}")
-
-        time.sleep(CHECK_INTERVAL_SEC)
+            time.sleep(CHECK_INTERVAL_SEC)
+    except KeyboardInterrupt:
+        logger.info("Monitor interrupted by user (Ctrl+C)")
+        cleanup_processes()
+        sys.exit(0)
 
 
 if __name__ == "__main__":
