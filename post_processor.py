@@ -44,7 +44,8 @@ class PostProcessor:
             # Read all CSV files
             for file_path in input_files:
                 if os.path.exists(file_path):
-                    df = pd.read_csv(file_path)
+                    # IMPORTANT: Use dtype=str to preserve phone_number format (with '+' prefix)
+                    df = pd.read_csv(file_path, dtype=str)
                     df['source_file'] = os.path.basename(file_path)
                     dataframes.append(df)
                     total_rows += len(df)
@@ -105,8 +106,9 @@ class PostProcessor:
         """
         try:
             # Read input CSV
-            df = pd.read_csv(input_file)
-            
+            # IMPORTANT: Use dtype=str to preserve phone_number format (with '+' prefix)
+            df = pd.read_csv(input_file, dtype=str)
+
             # Create wide-form DataFrame
             wide_df = df.copy()
             
@@ -300,7 +302,8 @@ class PostProcessor:
         """
         try:
             # Read input CSV
-            df = pd.read_csv(input_file)
+            # IMPORTANT: Use dtype=str to preserve phone_number format (with '+' prefix)
+            df = pd.read_csv(input_file, dtype=str)
             original_count = len(df)
 
             # ⚠️ DEDUPLICATION DISABLED - Just copy all data without removing duplicates
@@ -396,7 +399,8 @@ class PostProcessor:
         """
         try:
             # Read processed data
-            df = pd.read_csv(input_file)
+            # IMPORTANT: Use dtype=str to preserve phone_number format (with '+' prefix)
+            df = pd.read_csv(input_file, dtype=str)
 
             # Calculate statistics with safe column access
             stats = {
@@ -451,7 +455,8 @@ class PostProcessor:
         """
         try:
             # Read processed data
-            df = pd.read_csv(input_file)
+            # IMPORTANT: Use dtype=str to preserve phone_number format (with '+' prefix)
+            df = pd.read_csv(input_file, dtype=str)
 
             # Calculate statistics with safe column access
             stats = {
@@ -506,7 +511,8 @@ class PostProcessor:
         """
         try:
             # Read processed data
-            df = pd.read_csv(input_file)
+            # IMPORTANT: Use dtype=str to preserve phone_number format (with '+' prefix)
+            df = pd.read_csv(input_file, dtype=str)
 
             # Calculate statistics from wide-form columns
             stats = {
