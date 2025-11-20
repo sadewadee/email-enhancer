@@ -38,31 +38,39 @@ class SSLErrorHandler:
             r'doesn\'t match',
             r'SSL_ERROR_BAD_CERT_DOMAIN',
             r'CERTIFICATE_VERIFY_FAILED.*doesn\'t match',
+            r'SSL_ERROR_UNKNOWN_ISSUER',  # Playwright: Can't verify hostname
         ],
         SSLErrorType.CERTIFICATE_EXPIRED: [
             r'certificate.*expired',
             r'certificate.*verify failed.*expired',
             r'notAfter',
+            r'SEC_ERROR_EXPIRED_CERTIFICATE',  # Playwright/Firefox error
         ],
         SSLErrorType.SELF_SIGNED: [
             r'self.signed',
             r'self-signed certificate',
             r'certificate verify failed.*self',
+            r'SEC_ERROR_SELF_SIGNED_CERT',  # Playwright/Firefox error
         ],
         SSLErrorType.UNTRUSTED_ROOT: [
             r'CERTIFICATE_VERIFY_FAILED',
             r'certificate verify failed',
             r'unable to get local issuer certificate',
             r'untrusted',
+            r'SEC_ERROR_UNKNOWN_ISSUER',  # Playwright: Unknown issuer
+            r'SEC_ERROR_UNTRUSTED_ISSUER',  # Playwright: Untrusted issuer
+            r'MOZILLA_PKIX_ERROR_UNKNOWN_ISSUER',  # Firefox NSS library error
         ],
         SSLErrorType.CHAIN_INCOMPLETE: [
             r'chain.*incomplete',
             r'missing.*chain',
             r'intermediate.*certificate',
+            r'SEC_ERROR_INCOMPLETE_CERT_CHAIN',  # Playwright error
         ],
         SSLErrorType.CERTIFICATE_REVOKED: [
             r'revoked',
             r'certificate.*revoked',
+            r'SEC_ERROR_REVOKED_CERTIFICATE',  # Playwright error
         ],
     }
 
@@ -70,6 +78,7 @@ class SSLErrorHandler:
     def is_ssl_error(error: Exception) -> bool:
         """
         Check if an exception is SSL/certificate-related.
+        Detects both urllib/ssl.SSLError and Playwright/Firefox errors.
 
         Args:
             error: Exception to check
@@ -85,6 +94,21 @@ class SSLErrorHandler:
             if 'ssl' in error_str.lower() or 'certificate' in error_str.lower():
                 return True
             if isinstance(error.reason, ssl.SSLError):
+                return True
+
+        # Check for Playwright/Firefox specific SSL errors
+        error_str = str(error)
+        ssl_keywords = [
+            'ssl_error', 'sec_error', 'certificate',
+            'issuer', 'cert_', 'mozilla_pkix',
+            'untrusted', 'invalid', 'expired',
+            'revoked', 'chain'
+        ]
+
+        # Check if any SSL keyword appears (case-insensitive)
+        if any(keyword in error_str.lower() for keyword in ssl_keywords):
+            # Additional check: must contain "error" or specific SSL patterns
+            if 'error' in error_str.lower() or 'SEC_' in error_str or 'SSL_' in error_str:
                 return True
 
         return False

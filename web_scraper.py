@@ -684,7 +684,22 @@ def _subprocess_fetch(q, url, headless, solve_cloudflare, network_idle, google_s
             pass  # Queue might also be broken
     except Exception as e:
         try:
-            q.put({'ok': False, 'error': str(e)})
+            # Try to detect and classify SSL errors for better logging/recovery
+            error_str = str(e)
+            error_type = "unknown"
+
+            # Check if it's an SSL/certificate error
+            if 'SEC_ERROR' in error_str or 'SSL_ERROR' in error_str:
+                error_type = "ssl_certificate"
+                # Extract error code if present
+                import re
+                match = re.search(r'(SEC_ERROR_\w+|SSL_ERROR_\w+)', error_str)
+                if match:
+                    error_code = match.group(1)
+                    error_type = f"ssl_certificate ({error_code})"
+
+            result = {'ok': False, 'error': error_str, 'error_type': error_type}
+            q.put(result)
         except Exception:
             pass  # Silently fail if queue is broken
 
@@ -1585,12 +1600,35 @@ class WebScraper:
                     proxy_used=proxy_config.get('server') if proxy_config else None
                 )
             else:
+                # ====================================================================
+                # SSL ERROR DETECTION & LOGGING (Playwright/Firefox errors)
+                # ====================================================================
+                error_msg = msg.get('error', '')
+                error_type = msg.get('error_type', 'unknown')
+
+                # Check for SSL errors
+                if error_type.startswith('ssl_certificate') or 'SEC_ERROR' in error_msg or 'SSL_ERROR' in error_msg:
+                    try:
+                        # Create exception-like object for SSLErrorHandler
+                        class PlaywrightSSLError(Exception):
+                            pass
+                        ssl_exception = PlaywrightSSLError(error_msg)
+
+                        # Use SSLErrorHandler to classify and log
+                        if SSLErrorHandler.is_ssl_error(ssl_exception):
+                            SSLErrorHandler.log_ssl_error(ssl_exception, url, context="dynamic_fetch")
+                            strategy = SSLErrorHandler.get_recovery_strategy(ssl_exception, url)
+                            self.logger.debug(f"SSL recovery strategy: {strategy}")
+                    except Exception:
+                        pass
+
+                # Mark proxy as failed if proxy-related error
                 if proxy_config and 'server' in proxy_config:
-                    error_msg = msg.get('error', '')
                     if any(keyword in error_msg.lower() for keyword in ['proxy', 'connection', 'timeout', 'refused']):
                         self.proxy_manager.mark_proxy_failed(proxy_config['server'], reason=error_msg)
+
                 try:
-                    self.logger.error(f"Dynamic fetch error: {url} | {msg.get('error', '')}")
+                    self.logger.error(f"Dynamic fetch error: {url} | Type: {error_type} | {error_msg}")
                 except Exception:
                     pass
             return None
