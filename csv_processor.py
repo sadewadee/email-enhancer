@@ -980,8 +980,15 @@ class CSVProcessor:
                                 # Push to queue for consumer validation and writing
                                 scraped_queue.put(result)
 
+                    # Shutdown producer with timeout to prevent infinite hang
                     try:
-                        producer_executor.shutdown(wait=True)
+                        producer_executor.shutdown(wait=False)
+                        # Manual wait with 30s timeout
+                        deadline = time.time() + 30
+                        while producer_executor._threads and time.time() < deadline:
+                            time.sleep(0.1)
+                        if time.time() >= deadline:
+                            self.logger.warning("Producer executor shutdown timeout (30s) - forcing")
                     except (BrokenPipeError, OSError):
                         pass  # Suppress EPIPE during shutdown
 
@@ -990,6 +997,7 @@ class CSVProcessor:
                     sentinel_sent = True
 
                     deadline = time.time() + 60
+                    timed_out = False
                     while True:
                         try:
                             unfinished = getattr(scraped_queue, 'unfinished_tasks', 0)
@@ -999,11 +1007,30 @@ class CSVProcessor:
                             break
                         if time.time() > deadline:
                             self.logger.error("Queue join timeout; forcing shutdown")
+                            timed_out = True
                             break
                         time.sleep(0.1)
 
+                    # If queue join timed out, force cleanup to prevent deadlock
+                    if timed_out:
+                        try:
+                            # Notify all waiters to unblock
+                            scraped_queue._cond.notify_all()
+                            # Cancel background thread to prevent hang
+                            scraped_queue.cancel_join_thread()
+                            self.logger.warning("Queue cleanup forced after timeout")
+                        except Exception as e:
+                            self.logger.error(f"Queue cleanup error: {e}")
+
+                    # Shutdown consumer with timeout to prevent infinite hang
                     try:
-                        consumer_executor.shutdown(wait=True)
+                        consumer_executor.shutdown(wait=False)
+                        # Manual wait with 30s timeout
+                        deadline_consumer = time.time() + 30
+                        while consumer_executor._threads and time.time() < deadline_consumer:
+                            time.sleep(0.1)
+                        if time.time() >= deadline_consumer:
+                            self.logger.warning("Consumer executor shutdown timeout (30s) - forcing")
                     except (BrokenPipeError, OSError):
                         pass  # Suppress EPIPE during shutdown
 

@@ -309,6 +309,17 @@ def monitor_loop():
     # Register signal handler to reap zombie processes
     signal.signal(signal.SIGCHLD, sigchld_handler)
 
+    # Register SIGTERM handler for graceful shutdown (e.g., systemd stop, kill command)
+    def sigterm_handler(signum, frame):
+        logger.info("Monitor received SIGTERM/SIGINT, cleaning up and exiting...")
+        cleanup_processes()
+        # Use os._exit(0) instead of sys.exit(0) to prevent hanging on cleanup
+        # (same fix as main.py force quit issue)
+        os._exit(0)
+
+    signal.signal(signal.SIGTERM, sigterm_handler)
+    signal.signal(signal.SIGINT, sigterm_handler)  # Also handle Ctrl+C consistently
+
     # Register cleanup function to run on normal exit
     atexit.register(cleanup_processes)
 
@@ -417,9 +428,11 @@ def monitor_loop():
 
             time.sleep(CHECK_INTERVAL_SEC)
     except KeyboardInterrupt:
-        logger.info("Monitor interrupted by user (Ctrl+C)")
+        # This handler is now redundant since SIGINT is handled by signal handler above,
+        # but kept for backwards compatibility if signal handler fails
+        logger.info("Monitor interrupted by user (Ctrl+C) - fallback handler")
         cleanup_processes()
-        sys.exit(0)
+        os._exit(0)
 
 
 if __name__ == "__main__":

@@ -201,16 +201,33 @@ class EmailScraperValidator:
         """
         # Setup signal handlers for graceful shutdown
         shutdown_requested = False
+        handler_running = False  # Prevent re-entrance
 
         def signal_handler(signum, frame):
-            nonlocal shutdown_requested
+            nonlocal shutdown_requested, handler_running
+
+            # Prevent re-entrance (double trigger from SIGINT + SIGTERM)
+            if handler_running:
+                return
+            handler_running = True
+
             if shutdown_requested:
-                # Second Ctrl+C - force quit (use os._exit for immediate termination)
-                self.logger.warning("❌ Force quit!")
-                os._exit(1)  # Immediate kernel-level exit, bypasses all cleanup
+                # Second signal - force quit (use os._exit for immediate termination)
+                # Exit with code 0 to prevent monitor from respawning (it's intentional exit)
+                try:
+                    self.logger.warning("❌ Force quit!")
+                except:
+                    pass
+                os._exit(0)  # Changed from exit(1): graceful force quit, not a crash
+
             shutdown_requested = True
-            self.logger.warning("⚠️  Shutdown requested, finishing current tasks...")
-            self.logger.info("💡 Tip: Press Ctrl+C again to force quit")
+            try:
+                self.logger.warning("⚠️  Shutdown requested, finishing current tasks...")
+                self.logger.info("💡 Tip: Press Ctrl+C or send signal again to force quit")
+            except:
+                pass  # Logging may fail in signal handler
+
+            handler_running = False
 
         signal.signal(signal.SIGINT, signal_handler)
         signal.signal(signal.SIGTERM, signal_handler)
@@ -264,6 +281,15 @@ class EmailScraperValidator:
                 'status': 'failed',
                 'error': str(e)
             }
+        finally:
+            # Explicit cleanup to ensure resources are released
+            # This prevents process hangs in shutdown phase
+            try:
+                # Force garbage collection to cleanup any remaining resources
+                import gc
+                gc.collect()
+            except:
+                pass
 
     def process_multiple_csv(self,
                            input_files: List[str],

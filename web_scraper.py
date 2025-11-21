@@ -1536,7 +1536,7 @@ class WebScraper:
                     self.disable_resources,
                     proxy_config
                 ),
-                daemon=True
+                daemon=False  # Changed from True: allows graceful cleanup on exit
             )
             try:
                 proc.start()
@@ -1601,8 +1601,10 @@ class WebScraper:
             finally:
                 # Clean up queue resources
                 try:
+                    # Use cancel_join_thread() to prevent deadlock if subprocess crashed
+                    # before writing to queue. join_thread() can block indefinitely.
+                    result_q.cancel_join_thread()
                     result_q.close()
-                    result_q.join_thread()
                 except Exception:
                     pass
 
