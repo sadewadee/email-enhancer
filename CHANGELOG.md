@@ -1,3 +1,20 @@
+##### [0.1.3] - 2025-11-22
+
+        - Fixed (CRITICAL: Unkillable Process & Infinite Spawn Loop)
+            - **Daemon subprocess prevention**: Changed `daemon=True` to `daemon=False` di web_scraper.py untuk graceful cleanup
+            - **Queue deadlock**: Gunakan `cancel_join_thread()` instead of `join_thread()` untuk prevent blocking
+            - **Monitor orphan processes**: Tambah SIGTERM/SIGINT handler di monitor.py untuk cleanup saat killed
+            - **Signal handler respawn loop**: Exit code 0 untuk force quit (bukan exit code 1) agar monitor tidak respawn
+            - **Signal handler re-entrance**: Tambah flag `handler_running` untuk prevent double trigger
+            - **ThreadPoolExecutor hang**: Tambah 30s timeout untuk executor.shutdown() di csv_processor.py
+            - **Queue join timeout**: Force cleanup dengan `_cond.notify_all()` dan `cancel_join_thread()` saat timeout
+            - **Process exit hang**: Tambah explicit `gc.collect()` di main.py finally block
+
+        - Technical Details
+            - Root cause: Cascade failure dari daemon subprocess → queue deadlock → semaphore leak → executor hang → force exit → orphaned processes → respawn loop
+            - Impact: main.py bisa exit dalam 5 detik pada SIGTERM, tidak ada zombie/orphan processes
+            - Files modified: web_scraper.py, main.py, csv_processor.py, monitor.py
+
 ##### [0.1.2] - 2025-11-22
 
         - Fixed
