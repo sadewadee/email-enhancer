@@ -205,9 +205,9 @@ class EmailScraperValidator:
         def signal_handler(signum, frame):
             nonlocal shutdown_requested
             if shutdown_requested:
-                # Second Ctrl+C - force quit
+                # Second Ctrl+C - force quit (use os._exit for immediate termination)
                 self.logger.warning("❌ Force quit!")
-                sys.exit(1)
+                os._exit(1)  # Immediate kernel-level exit, bypasses all cleanup
             shutdown_requested = True
             self.logger.warning("⚠️  Shutdown requested, finishing current tasks...")
             self.logger.info("💡 Tip: Press Ctrl+C again to force quit")
