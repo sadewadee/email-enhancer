@@ -18,6 +18,110 @@ import json
 from urllib.request import Request, urlopen
 from urllib.error import URLError, HTTPError
 import threading
+import chardet  # FIX: For proper encoding detection of non-Latin content
+
+
+# ============================================================================
+# ENCODING UTILITIES FOR NON-LATIN CHARACTER SUPPORT (CJK, Arabic, etc.)
+# ============================================================================
+
+def _extract_charset_from_content_type(content_type: str) -> Optional[str]:
+    """
+    Extract charset from Content-Type header.
+    Example: 'text/html; charset=shift_jis' -> 'shift_jis'
+    """
+    if not content_type:
+        return None
+    match = re.search(r'charset=([^\s;]+)', content_type, re.IGNORECASE)
+    if match:
+        charset = match.group(1).strip('"\'')
+        return charset.lower()
+    return None
+
+
+def _detect_encoding_from_html(html_bytes: bytes) -> Optional[str]:
+    """
+    Detect encoding from HTML meta tags.
+    Supports: <meta charset="..."> and <meta http-equiv="Content-Type" content="...;charset=...">
+    """
+    # Only check first 4KB for meta tags
+    sample = html_bytes[:4096]
+    try:
+        # Try to decode as ASCII to search for meta tags
+        sample_str = sample.decode('ascii', errors='ignore')
+
+        # Pattern 1: <meta charset="utf-8">
+        match = re.search(r'<meta[^>]+charset=["\']?([^"\'\s>]+)', sample_str, re.IGNORECASE)
+        if match:
+            return match.group(1).lower()
+
+        # Pattern 2: <meta http-equiv="Content-Type" content="text/html; charset=...">
+        match = re.search(r'<meta[^>]+content=["\'][^"\']*charset=([^"\'\s;>]+)', sample_str, re.IGNORECASE)
+        if match:
+            return match.group(1).lower()
+    except Exception:
+        pass
+    return None
+
+
+def decode_html_content(raw_bytes: bytes, content_type: str = None) -> str:
+    """
+    Decode HTML content with proper encoding detection for non-Latin characters.
+
+    Priority:
+    1. charset from Content-Type header
+    2. charset from HTML meta tags
+    3. chardet auto-detection
+    4. utf-8 with surrogateescape (preserves bytes)
+
+    Args:
+        raw_bytes: Raw HTML bytes
+        content_type: Content-Type header value (optional)
+
+    Returns:
+        Decoded HTML string with non-Latin characters preserved
+    """
+    logger = logging.getLogger(__name__)
+
+    # 1. Try charset from Content-Type header
+    charset = _extract_charset_from_content_type(content_type)
+    if charset:
+        try:
+            return raw_bytes.decode(charset)
+        except (UnicodeDecodeError, LookupError) as e:
+            logger.debug(f"Header charset '{charset}' failed: {e}")
+
+    # 2. Try charset from HTML meta tags
+    meta_charset = _detect_encoding_from_html(raw_bytes)
+    if meta_charset:
+        try:
+            return raw_bytes.decode(meta_charset)
+        except (UnicodeDecodeError, LookupError) as e:
+            logger.debug(f"Meta charset '{meta_charset}' failed: {e}")
+
+    # 3. Try chardet auto-detection (good for CJK)
+    try:
+        detected = chardet.detect(raw_bytes[:10000])  # Sample first 10KB
+        if detected and detected.get('encoding'):
+            enc = detected['encoding']
+            confidence = detected.get('confidence', 0)
+            if confidence > 0.7:
+                try:
+                    return raw_bytes.decode(enc)
+                except (UnicodeDecodeError, LookupError) as e:
+                    logger.debug(f"Chardet encoding '{enc}' (conf={confidence:.2f}) failed: {e}")
+    except Exception as e:
+        logger.debug(f"Chardet detection failed: {e}")
+
+    # 4. UTF-8 with surrogateescape (preserves bytes that can't be decoded)
+    try:
+        return raw_bytes.decode('utf-8', errors='surrogateescape')
+    except Exception:
+        pass
+
+    # 5. Final fallback: latin-1 (never fails, but may corrupt non-ASCII)
+    logger.warning("Using latin-1 fallback - non-Latin characters may be corrupted")
+    return raw_bytes.decode('latin-1', errors='replace')
 
 # Import proxy manager
 from proxy_manager import ProxyManager
@@ -1193,14 +1297,13 @@ class WebScraper:
                 }
             )
             resp = urlopen(req, timeout=min(self.timeout, 8))  # Reduced from 12s → 8s
-            content_type = (resp.headers.get('Content-Type') or '').lower()
-            if ('text/html' not in content_type) and ('application/xhtml+xml' not in content_type):
+            content_type = (resp.headers.get('Content-Type') or '')
+            content_type_lower = content_type.lower()
+            if ('text/html' not in content_type_lower) and ('application/xhtml+xml' not in content_type_lower):
                 return None
             raw = resp.read()
-            try:
-                html = raw.decode('utf-8', errors='replace')
-            except Exception:
-                html = raw.decode('latin-1', errors='replace')
+            # FIX: Use proper encoding detection for non-Latin characters (CJK, Arabic, etc.)
+            html = decode_html_content(raw, content_type)
             final_url = getattr(resp, 'geturl', lambda: url)()
 
             # Heuristic: skip if content looks like a challenge or is too short

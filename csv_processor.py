@@ -41,7 +41,14 @@ def detect_file_encoding(file_path: str, sample_size: int = 100000) -> str:
 
     Returns:
         Detected encoding (e.g., 'utf-8', 'latin-1', 'cp1252')
+
+    FIX: Improved encoding detection:
+    - Only read sample for validation (not entire file)
+    - Better error handling
+    - Warn when falling back to latin-1
     """
+    logger = logging.getLogger(__name__)
+
     try:
         # Read sample from file
         with open(file_path, 'rb') as f:
@@ -53,25 +60,48 @@ def detect_file_encoding(file_path: str, sample_size: int = 100000) -> str:
         confidence = detected.get('confidence', 0)
 
         if encoding and confidence > 0.7:
+            logger.debug(f"Detected encoding: {encoding} (confidence: {confidence:.2f})")
             return encoding.lower()
+        else:
+            logger.debug(f"Low confidence encoding detection: {encoding} ({confidence:.2f})")
     except Exception as e:
-        pass
+        logger.warning(f"Encoding detection failed: {e}")
 
     # Fallback: Try common encodings in order
-    # Validate entire file, not just first 10 lines (fixes deep encoding errors)
-    fallback_encodings = ['utf-8', 'latin-1', 'cp1252', 'iso-8859-1', 'utf-16']
+    # FIX: Added CJK encodings for Japanese/Korean/Chinese content
+    fallback_encodings = [
+        'utf-8',
+        # CJK encodings (Japanese, Korean, Chinese)
+        'shift_jis', 'euc-jp', 'iso-2022-jp',  # Japanese
+        'euc-kr', 'cp949',  # Korean
+        'gb2312', 'gbk', 'gb18030', 'big5',  # Chinese
+        # Windows codepages
+        'cp1252', 'cp1251', 'cp1250',
+        # ISO encodings
+        'iso-8859-1', 'iso-8859-15',
+        # Unicode variants
+        'utf-16', 'utf-16-le', 'utf-16-be',
+    ]
+    file_size = os.path.getsize(file_path)
+    validation_size = min(sample_size * 2, file_size)  # Read max 200KB for validation
 
     for encoding in fallback_encodings:
         try:
             with open(file_path, 'r', encoding=encoding) as f:
-                # Read ENTIRE file to validate encoding works throughout
-                # This catches invalid bytes that appear later in the file
-                f.read()
-            return encoding
+                content = f.read(validation_size)
+                # Check for replacement characters (indicates wrong encoding)
+                if '\ufffd' not in content:
+                    logger.debug(f"Fallback encoding validated: {encoding}")
+                    return encoding
         except (UnicodeDecodeError, LookupError):
             continue
 
     # Final fallback: latin-1 is most permissive (accepts all bytes 0x00-0xFF)
+    # FIX: Log warning when using latin-1 as it may cause data corruption
+    logger.warning(
+        f"⚠️ Using latin-1 fallback encoding for {os.path.basename(file_path)}. "
+        "This may cause character corruption for CJK/non-ASCII text."
+    )
     return 'latin-1'
 
 # ============================================================================
@@ -222,10 +252,17 @@ def read_completion_marker(csv_path: str) -> Optional[Dict[str, Any]]:
 # Enhanced processing rate calculator - imports already exist above
 
 class ProcessingRateCalculator:
-    """Enhanced processing rate calculator with multiple metrics"""
+    """
+    Enhanced processing rate calculator with multiple metrics.
+
+    FIX: Added thread safety and memory leak prevention:
+    - All shared state protected by threading.Lock
+    - completion_times deque has maxlen to prevent unbounded growth
+    """
 
     def __init__(self, window_minutes=3, smoothing_factor=0.2):
-        self.completion_times = deque()
+        # FIX: Add maxlen to prevent memory leak for long-running processes
+        self.completion_times = deque(maxlen=1000)  # Cap at 1000 entries
         self.window_secs = window_minutes * 60  # 3 minutes vs old 10
         self.smoothing_factor = smoothing_factor
         self.smoothed_rate = 0.0
@@ -233,71 +270,81 @@ class ProcessingRateCalculator:
         self.total_processed = 0
         self.recent_rates = deque(maxlen=10)
         self.last_rate_time = time.time()
+        # FIX: Add lock for thread safety
+        self._lock = threading.Lock()
 
     def add_completion(self):
-        now = time.time()
-        self.completion_times.append(now)
-        self.total_processed += 1
+        # FIX: Thread-safe access to shared state
+        with self._lock:
+            now = time.time()
+            self.completion_times.append(now)
+            self.total_processed += 1
 
-        # Clean old entries
-        while self.completion_times and (now - self.completion_times[0]) > self.window_secs:
-            self.completion_times.popleft()
+            # Clean old entries (now also bounded by maxlen)
+            while self.completion_times and (now - self.completion_times[0]) > self.window_secs:
+                self.completion_times.popleft()
 
-        # Calculate rate based on total time elapsed since start
-        # This gives more stable and realistic numbers
-        elapsed_time = now - self.start_time
+            # Calculate rate based on total time elapsed since start
+            # This gives more stable and realistic numbers
+            elapsed_time = now - self.start_time
 
-        # Use minimum elapsed time to prevent unrealistic rates
-        # At least 1 second for calculation to avoid division by very small numbers
-        elapsed_minutes = max(elapsed_time / 60.0, 1.0 / 60.0)
+            # Use minimum elapsed time to prevent unrealistic rates
+            # At least 1 second for calculation to avoid division by very small numbers
+            elapsed_minutes = max(elapsed_time / 60.0, 1.0 / 60.0)
 
-        # Calculate overall rate: total processed / elapsed time
-        current_rate = self.total_processed / elapsed_minutes
+            # Calculate overall rate: total processed / elapsed time
+            current_rate = self.total_processed / elapsed_minutes
 
-        # Cap maximum rate at reasonable value (1000 per minute = ~16 per second)
-        # Most web scraping won't exceed this due to network/processing constraints
-        max_rate = 1000.0
-        current_rate = min(current_rate, max_rate)
+            # Cap maximum rate at reasonable value (1000 per minute = ~16 per second)
+            # Most web scraping won't exceed this due to network/processing constraints
+            max_rate = 1000.0
+            current_rate = min(current_rate, max_rate)
 
-        # Update smoothed rate with exponential moving average
-        if self.smoothed_rate == 0.0:
-            self.smoothed_rate = current_rate
-        else:
-            self.smoothed_rate = (
-                self.smoothing_factor * current_rate +
-                (1 - self.smoothing_factor) * self.smoothed_rate
-            )
+            # Update smoothed rate with exponential moving average
+            if self.smoothed_rate == 0.0:
+                self.smoothed_rate = current_rate
+            else:
+                self.smoothed_rate = (
+                    self.smoothing_factor * current_rate +
+                    (1 - self.smoothing_factor) * self.smoothed_rate
+                )
 
-        self.last_rate_time = now
+            self.last_rate_time = now
 
     def get_current_rate(self) -> float:
-        return self.smoothed_rate
+        # FIX: Thread-safe read
+        with self._lock:
+            return self.smoothed_rate
 
     def get_instantaneous_rate(self, last_seconds=30) -> float:
         """Calculate instantaneous rate based on recent completions."""
-        now = time.time()
-        recent = [t for t in self.completion_times if now - t <= last_seconds]
+        # FIX: Thread-safe access
+        with self._lock:
+            now = time.time()
+            recent = [t for t in self.completion_times if now - t <= last_seconds]
 
-        if len(recent) >= 2:
-            # Calculate rate based on recent completions
-            time_span = now - recent[0]
-            # Use minimum time span to avoid unrealistic rates
-            time_span_minutes = max(time_span / 60.0, 1.0 / 60.0)
-            rate = len(recent) / time_span_minutes
-            # Cap at 1000/min
-            return min(rate, 1000.0)
-        elif len(recent) == 1:
-            # Fall back to overall rate for single recent completion
-            return self.get_current_rate()
+            if len(recent) >= 2:
+                # Calculate rate based on recent completions
+                time_span = now - recent[0]
+                # Use minimum time span to avoid unrealistic rates
+                time_span_minutes = max(time_span / 60.0, 1.0 / 60.0)
+                rate = len(recent) / time_span_minutes
+                # Cap at 1000/min
+                return min(rate, 1000.0)
+            elif len(recent) == 1:
+                # Fall back to overall rate for single recent completion
+                return self.smoothed_rate
 
-        return 0.0
+            return 0.0
 
     def get_eta_minutes(self, total_urls: int) -> Optional[float]:
-        if total_urls <= self.total_processed:
-            return 0.0
-        remaining = total_urls - self.total_processed
-        current_rate = self.get_current_rate()
-        return remaining / current_rate if current_rate > 0 else None
+        # FIX: Thread-safe read
+        with self._lock:
+            if total_urls <= self.total_processed:
+                return 0.0
+            remaining = total_urls - self.total_processed
+            current_rate = self.smoothed_rate
+            return remaining / current_rate if current_rate > 0 else None
 
     def get_eta_formatted(self, total_urls: int) -> str:
         eta = self.get_eta_minutes(total_urls)
@@ -644,10 +691,8 @@ class CSVProcessor:
             # Final header: mandatory + redirect tracking + contacts + metrics
             header = mandatory_cols + redirect_cols + contact_cols + metrics_cols
 
-            # Open output file and write header
-            csv_file = open(output_file, 'w', newline='', encoding='utf-8')
-            writer = csv.DictWriter(csv_file, fieldnames=header)
-            writer.writeheader()
+            # FIX: Track csv_file for guaranteed cleanup in finally block
+            csv_file = None
 
             # Start timing the processing
             start_time = time.time()
@@ -667,6 +712,11 @@ class CSVProcessor:
             last_log_time = time.time()
             per_menit = 0.0
 
+            # FIX: Open CSV file with try/finally to guarantee close on exception
+            csv_file = open(output_file, 'w', newline='', encoding='utf-8')
+            writer = csv.DictWriter(csv_file, fieldnames=header)
+            writer.writeheader()
+
             # Create progress bar with clean format showing rate and ETA
             with tqdm(total=total_urls, desc="Processing URLs", unit="URL",
                      bar_format='{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} {postfix}',
@@ -684,10 +734,21 @@ class CSVProcessor:
                 # Shared queue between producer (scraping) and consumer (API validation)
                 scraped_queue: "queue.Queue[Dict[str, Any] | None]" = queue.Queue(maxsize=queue_size)
 
+                # FIX: Shutdown event to signal consumers to exit gracefully
+                # This prevents blocked get() calls from hanging forever
+                shutdown_event = threading.Event()
+
                 def consumer_loop():
                     nonlocal processed_count, scraped_count, success_count, total_emails, total_validated_emails, total_phones, total_whatsapp, total_processing_time, per_menit, last_log_time
-                    while True:
-                        item = scraped_queue.get()
+                    while not shutdown_event.is_set():
+                        # FIX: Use timeout-based get() to prevent indefinite blocking
+                        # This allows consumer to periodically check shutdown_event
+                        try:
+                            item = scraped_queue.get(timeout=2)
+                        except queue.Empty:
+                            # No item available, loop back and check shutdown_event
+                            continue
+
                         if item is None:
                             scraped_queue.task_done()
                             break
@@ -837,20 +898,23 @@ class CSVProcessor:
                                     # Log JSON parse error but continue processing
                                     self.logger.debug(f"Failed to parse complete_address JSON for {url}: {str(e)}")
 
+                            # FIX: Move processed_count increment inside writer_lock to prevent race
+                            # Intelligent flush frequency: flush more often for large files
+                            # - Every 10 rows for files < 10MB (default)
+                            # - Every 50 rows for files 10-100MB (less overhead)
+                            # - Every 100 rows for files > 100MB (optimal balance)
+                            flush_interval = 10 if file_size_mb < 10 else (50 if file_size_mb < 100 else 100)
+
                             with writer_lock:
                                 writer.writerow(output_row)
-                                # Intelligent flush frequency: flush more often for large files
-                                # - Every 10 rows for files < 10MB (default)
-                                # - Every 50 rows for files 10-100MB (less overhead)
-                                # - Every 100 rows for files > 100MB (optimal balance)
-                                flush_interval = 10 if file_size_mb < 10 else (50 if file_size_mb < 100 else 100)
+                                # FIX: Increment processed_count inside lock for consistent flush logic
+                                processed_count += 1
                                 if processed_count % flush_interval == 0:
                                     csv_file.flush()
 
                             with progress_lock:
                                 if result['status'] == 'success':
                                     success_count += 1
-                                processed_count += 1
                                 per_menit = rate_calculator.get_current_rate()
 
                         except Exception as e:
@@ -864,6 +928,17 @@ class CSVProcessor:
                                 scraped_queue.task_done()
                             except Exception:
                                 pass
+
+                    # FIX: Drain remaining items when shutdown is set
+                    # This ensures task_done() is called for all items, allowing join() to complete
+                    while shutdown_event.is_set():
+                        try:
+                            remaining_item = scraped_queue.get_nowait()
+                            scraped_queue.task_done()
+                            if remaining_item is None:
+                                break
+                        except queue.Empty:
+                            break
 
                 # Start consumer pool
                 consumer_executor = ThreadPoolExecutor(max_workers=smtp_workers)
@@ -980,66 +1055,81 @@ class CSVProcessor:
                                 # Push to queue for consumer validation and writing
                                 scraped_queue.put(result)
 
-                    # Shutdown producer with timeout to prevent infinite hang
-                    try:
-                        producer_executor.shutdown(wait=False)
-                        # Manual wait with 30s timeout
-                        deadline = time.time() + 30
-                        while producer_executor._threads and time.time() < deadline:
-                            time.sleep(0.1)
-                        if time.time() >= deadline:
-                            self.logger.warning("Producer executor shutdown timeout (30s) - forcing")
-                    except (BrokenPipeError, OSError):
-                        pass  # Suppress EPIPE during shutdown
+                    # FIX: Set shutdown event FIRST to signal consumers to exit
+                    # Consumers check this flag on each iteration (with 2s timeout on get())
+                    shutdown_event.set()
 
+                    # FIX: Send sentinels using non-blocking put
+                    # Even if some fail, consumers will exit due to shutdown_event
                     for _ in range(smtp_workers):
-                        scraped_queue.put(None)
+                        try:
+                            scraped_queue.put_nowait(None)
+                        except queue.Full:
+                            # Queue is full, but consumers will exit via shutdown_event anyway
+                            pass
+                        except Exception:
+                            pass
                     sentinel_sent = True
 
-                    deadline = time.time() + 60
-                    timed_out = False
-                    while True:
+                    # FIX: Use queue.join() with timeout thread
+                    # Reduced timeout since consumers will exit within ~2s due to shutdown_event
+                    join_complete = threading.Event()
+
+                    def queue_join_with_timeout():
                         try:
-                            unfinished = getattr(scraped_queue, 'unfinished_tasks', 0)
+                            scraped_queue.join()
+                            join_complete.set()
                         except Exception:
-                            unfinished = 0
-                        if unfinished == 0:
-                            break
-                        if time.time() > deadline:
-                            self.logger.error("Queue join timeout; forcing shutdown")
-                            timed_out = True
-                            break
-                        time.sleep(0.1)
+                            pass
 
-                    # If queue join timed out, force cleanup to prevent deadlock
-                    if timed_out:
+                    join_thread = threading.Thread(target=queue_join_with_timeout, daemon=True)
+                    join_thread.start()
+
+                    # Wait up to 15 seconds for queue to drain (reduced from 60s)
+                    # Consumers will self-exit within ~2s due to shutdown_event + timeout get()
+                    if not join_complete.wait(timeout=15):
+                        self.logger.warning("Queue join timeout (15s); consumers should have exited")
+                        # Drain any remaining items to release join()
                         try:
-                            # Notify all waiters to unblock
-                            scraped_queue._cond.notify_all()
-                            # Cancel background thread to prevent hang
-                            scraped_queue.cancel_join_thread()
-                            self.logger.warning("Queue cleanup forced after timeout")
+                            while not scraped_queue.empty():
+                                try:
+                                    scraped_queue.get_nowait()
+                                    scraped_queue.task_done()
+                                except Exception:
+                                    break
                         except Exception as e:
-                            self.logger.error(f"Queue cleanup error: {e}")
+                            self.logger.debug(f"Queue drain error (ignorable): {e}")
 
-                    # Shutdown consumer with timeout to prevent infinite hang
+                    # Shutdown producer executor
                     try:
+                        producer_executor.shutdown(wait=True, cancel_futures=True)
+                    except TypeError:
+                        # Python < 3.9 doesn't support cancel_futures
+                        producer_executor.shutdown(wait=False)
+                    except Exception as e:
+                        self.logger.debug(f"Producer shutdown: {e}")
+
+                    # Shutdown consumer executor
+                    try:
+                        consumer_executor.shutdown(wait=True, cancel_futures=True)
+                    except TypeError:
+                        # Python < 3.9 doesn't support cancel_futures
                         consumer_executor.shutdown(wait=False)
-                        # Manual wait with 30s timeout
-                        deadline_consumer = time.time() + 30
-                        while consumer_executor._threads and time.time() < deadline_consumer:
-                            time.sleep(0.1)
-                        if time.time() >= deadline_consumer:
-                            self.logger.warning("Consumer executor shutdown timeout (30s) - forcing")
-                    except (BrokenPipeError, OSError):
-                        pass  # Suppress EPIPE during shutdown
+                    except Exception as e:
+                        self.logger.debug(f"Consumer shutdown: {e}")
 
                 finally:
+                    # FIX: Always set shutdown_event in finally block
+                    # This ensures consumers exit even on exception
+                    try:
+                        shutdown_event.set()
+                    except Exception:
+                        pass
                     try:
                         if not sentinel_sent:
                             for _ in range(smtp_workers):
                                 try:
-                                    scraped_queue.put(None)
+                                    scraped_queue.put_nowait(None)
                                 except Exception:
                                     break
                     except Exception:
@@ -1053,11 +1143,7 @@ class CSVProcessor:
                     except Exception:
                         pass
 
-            # Close CSV file after streaming writes
-            try:
-                csv_file.close()
-            except Exception:
-                pass
+            # NOTE: csv_file.close() moved to finally block for guaranteed cleanup
 
             # End timing
             end_time = time.time()
@@ -1107,6 +1193,16 @@ class CSVProcessor:
             write_completion_marker(output_file, partial_stats, status="partial", error_message=str(e))
 
             raise
+
+        finally:
+            # FIX: Guarantee CSV file is closed even on exception
+            # This prevents file descriptor leak
+            if csv_file is not None:
+                try:
+                    csv_file.close()
+                    self.logger.debug(f"CSV file closed: {output_file}")
+                except Exception as close_err:
+                    self.logger.warning(f"Error closing CSV file: {close_err}")
 
     def _save_results_to_csv(self, results: List[Dict], original_df: pd.DataFrame, output_file: str):
         """

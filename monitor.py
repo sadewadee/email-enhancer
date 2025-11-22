@@ -2,9 +2,6 @@
 import os
 import shutil
 import sys
-
-# Ensure PYTHON_BIN is defined early to prevent NameError during runtime
-PYTHON_BIN = sys.executable
 import time
 import logging
 import subprocess
@@ -17,6 +14,27 @@ import atexit
 from pathlib import Path
 from typing import List, Set, Dict
 
+# ============================================================================
+# PYTHON INTERPRETER RESOLUTION (must be at top, before any usage)
+# ============================================================================
+def resolve_python_bin() -> str:
+    """
+    Tentukan interpreter Python yang digunakan.
+    Prioritas: venv/bin/python -> .venv/bin/python -> env/bin/python -> sys.executable -> 'python3'.
+    """
+    candidates = [
+        Path("venv/bin/python"),
+        Path(".venv/bin/python"),
+        Path("env/bin/python"),
+    ]
+    for p in candidates:
+        if p.exists():
+            return str(p)
+    # Fallback to current interpreter or system python3
+    return sys.executable or shutil.which("python3") or "python3"
+
+PYTHON_BIN = resolve_python_bin()
+
 # Direktori yang dipantau
 COUNTRY_DIR = Path("country")
 DATA_DIR = Path("new_data")
@@ -27,26 +45,43 @@ CHECK_INTERVAL_SEC = 30
 # Batas maksimal instance main.py yang berjalan
 MAX_MAIN_INSTANCES = 3
 
+# Maximum log file size before rotation (10MB)
+MAX_LOG_SIZE_BYTES = 10 * 1024 * 1024
+
+# ps aux timeout in seconds
+PS_TIMEOUT_SECONDS = 5
+
 _lock = threading.Lock()
 _procs: Dict[str, subprocess.Popen] = {}
 _logger = None  # Global logger ref for signal handler
+_reaped_pids = []  # Queue for reaped PIDs to log in main loop (async-signal-safe)
 
 
 def sigchld_handler(signum, frame):
-    """Reap zombie child processes when SIGCHLD signal received."""
+    """
+    Reap zombie child processes when SIGCHLD signal received.
+
+    IMPORTANT: This is a signal handler - must be async-signal-safe!
+    - NO logging (can deadlock if signal fires during logging)
+    - NO complex operations
+    - Only simple operations like waitpid() and list.append()
+
+    Reaped PIDs are stored in _reaped_pids for logging in main loop.
+    """
+    global _reaped_pids
     try:
         while True:
             pid, status = os.waitpid(-1, os.WNOHANG)
             if pid == 0:
                 break
-            if _logger:
-                _logger.debug(f"Child process {pid} reaped with status {status >> 8}")
+            # Store for logging in main loop (async-signal-safe)
+            _reaped_pids.append((pid, status >> 8))
     except ChildProcessError:
         # No more children to reap
         pass
-    except Exception as e:
-        if _logger:
-            _logger.warning(f"Error in SIGCHLD handler: {e}")
+    except Exception:
+        # Silently ignore - cannot log safely in signal handler
+        pass
 
 
 def cleanup_processes():
@@ -151,23 +186,34 @@ def is_file_stable(path: Path, stability_window: int = 5) -> bool:
 def validate_csv_basic(path: Path) -> bool:
     """
     Validasi CSV dasar: bisa dibuka dan memiliki setidaknya satu baris.
+    FIX: Added CJK encodings for Japanese/Korean/Chinese CSV files.
     """
-    try:
-        with path.open("r", newline="", encoding="utf-8") as f:
-            reader = csv.reader(f)
-            first = next(reader, None)
-            return first is not None
-    except UnicodeDecodeError:
-        # Coba encoding lain jika UTF-8 gagal
+    # FIX: Try multiple encodings including CJK
+    encodings_to_try = [
+        'utf-8',
+        # CJK encodings
+        'shift_jis', 'euc-jp',  # Japanese
+        'euc-kr', 'cp949',  # Korean
+        'gb2312', 'gbk', 'big5',  # Chinese
+        # Western encodings
+        'cp1252', 'iso-8859-1',
+        # Final fallback
+        'latin-1',
+    ]
+
+    for encoding in encodings_to_try:
         try:
-            with path.open("r", newline="", encoding="latin-1") as f:
+            with path.open("r", newline="", encoding=encoding) as f:
                 reader = csv.reader(f)
                 first = next(reader, None)
-                return first is not None
+                if first is not None:
+                    return True
+        except (UnicodeDecodeError, LookupError):
+            continue
         except Exception:
             return False
-    except Exception:
-        return False
+
+    return False
 
 
 def list_unprocessed_countries() -> List[str]:
@@ -194,8 +240,15 @@ def get_running_main_instances() -> int:
     USER PID %CPU %MEM VSZ RSS TT STAT STARTED TIME COMMAND
     """
     try:
-        res = subprocess.run(["ps", "aux"], capture_output=True, text=True, check=False)
-        lines = res.stdout.splitlines()
+        # FIX: Add timeout to prevent hanging
+        res = subprocess.run(
+            ["ps", "aux"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=PS_TIMEOUT_SECONDS
+        )
+        lines = res.stdout.splitlines()[:1000]  # Limit to 1000 lines for safety
         count = 0
 
         for line in lines:
@@ -220,9 +273,14 @@ def get_running_main_instances() -> int:
             # X = dead
             if status in ['S', 'R', 'Ss', 'Rs', 'S+', 'R+']:
                 count += 1
-                _logger.debug(f"Active main.py process detected: {line[:120]}")
+                if _logger:
+                    _logger.debug(f"Active main.py process detected: {line[:120]}")
 
         return count
+    except subprocess.TimeoutExpired:
+        if _logger:
+            _logger.warning(f"ps aux timed out after {PS_TIMEOUT_SECONDS}s")
+        return 0
     except Exception as e:
         if _logger:
             _logger.warning(f"Error counting main.py instances: {e}")
@@ -236,18 +294,62 @@ def get_running_countries() -> Set[str]:
     """
     running: Set[str] = set()
     try:
-        res = subprocess.run(["ps", "aux"], capture_output=True, text=True, check=False)
+        # FIX: Add timeout to prevent hanging
+        res = subprocess.run(
+            ["ps", "aux"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=PS_TIMEOUT_SECONDS
+        )
         # Tangkap country/<nama>.csv, ambil nama negaranya (group 2)
         pattern = re.compile(r"main\.py.*\bsingle\b.*?(country/([^/\s]+)\.csv)")
-        for line in res.stdout.splitlines():
+        for line in res.stdout.splitlines()[:1000]:  # Limit to 1000 lines
             m = pattern.search(line)
             if m:
                 name = m.group(2)
                 if name:
                     running.add(Path(name).stem)
+    except subprocess.TimeoutExpired:
+        if _logger:
+            _logger.warning(f"ps aux timed out after {PS_TIMEOUT_SECONDS}s")
     except Exception:
         pass
     return running
+
+
+def rotate_log_if_needed(log_file: Path) -> None:
+    """
+    Rotate log file if it exceeds MAX_LOG_SIZE_BYTES.
+    Keeps last 5 backup files.
+    """
+    try:
+        if not log_file.exists():
+            return
+
+        if log_file.stat().st_size <= MAX_LOG_SIZE_BYTES:
+            return
+
+        # Rotate: rename current to .log.timestamp
+        backup = log_file.with_suffix(f'.log.{int(time.time())}')
+        log_file.rename(backup)
+
+        if _logger:
+            _logger.info(f"📁 Rotated log file: {log_file.name} -> {backup.name}")
+
+        # Keep only last 5 backups
+        pattern = f'{log_file.stem}.log.*'
+        old_logs = sorted(log_file.parent.glob(pattern), key=lambda p: p.stat().st_mtime)
+        for old in old_logs[:-5]:
+            try:
+                old.unlink()
+                if _logger:
+                    _logger.debug(f"Deleted old log backup: {old.name}")
+            except Exception:
+                pass
+    except Exception as e:
+        if _logger:
+            _logger.warning(f"Error rotating log file {log_file}: {e}")
 
 
 def start_main_for_country(country: str, logger: logging.Logger) -> bool:
@@ -274,12 +376,18 @@ def start_main_for_country(country: str, logger: logging.Logger) -> bool:
         str(input_csv),
         "--output-dir",
         str(DATA_DIR),
+        "--limit",
+        "5",  # Batasi ke 5 entri untuk pengujian cepat
         "--timeout",
         "120",  # Request timeout in seconds
         "--cf-wait-timeout",
         "90",  # Cloudflare challenge timeout (increased from default 60)
     ]
     log_file = Path("logs") / f"main_{country}.log"
+
+    # FIX: Rotate log file if too large (prevents disk exhaustion)
+    rotate_log_if_needed(log_file)
+
     logger.info(f"Menjalankan: {' '.join(cmd)} | py: {PYTHON_BIN} | log: {log_file}")
     try:
         with _lock:
@@ -326,6 +434,14 @@ def monitor_loop():
     try:
         while True:
             try:
+                # FIX: Log PIDs reaped by signal handler (async-signal-safe logging)
+                global _reaped_pids
+                if _reaped_pids:
+                    reaped_copy = _reaped_pids.copy()
+                    _reaped_pids.clear()
+                    for pid, exit_code in reaped_copy:
+                        logger.debug(f"Child process {pid} reaped by signal handler with exit code {exit_code}")
+
                 # AGGRESSIVE ZOMBIE REAPING: Reap any orphaned processes
                 # This is a safety net against missed signals
                 try:
@@ -333,8 +449,7 @@ def monitor_loop():
                         pid, status = os.waitpid(-1, os.WNOHANG)
                         if pid == 0:
                             break
-                        if _logger:
-                            _logger.info(f"🧟 Reaped orphaned process (PID {pid}, status {status >> 8}) in monitor loop")
+                        logger.info(f"🧟 Reaped orphaned process (PID {pid}, status {status >> 8}) in monitor loop")
                 except ChildProcessError:
                     pass  # No more children to reap
 
@@ -437,20 +552,3 @@ def monitor_loop():
 
 if __name__ == "__main__":
     monitor_loop()
-def resolve_python_bin() -> str:
-    """
-    Tentukan interpreter Python yang digunakan.
-    Prioritas: venv/bin/python -> .venv/bin/python -> env/bin/python -> which('python3') -> 'python3'.
-    """
-    candidates = [
-        Path("venv/bin/python"),
-        Path(".venv/bin/python"),
-        Path("env/bin/python"),
-    ]
-    for p in candidates:
-        if p.exists():
-            return str(p)
-    return shutil.which("python3") or "python3"
-
-
-PYTHON_BIN = resolve_python_bin()
