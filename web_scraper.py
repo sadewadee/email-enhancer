@@ -631,6 +631,26 @@ def _subprocess_fetch(q, url, headless, solve_cloudflare, network_idle, google_s
     Child process target: perform StealthyFetcher.fetch and return minimal page fields via Queue.
     Logging is globally disabled and stdout/stderr are wrapped to suppress Cloudflare progress spam.
     """
+    # FIX: Handle SIGTERM gracefully to prevent Node.js EPIPE errors
+    # When parent kills this process, we need to exit cleanly before Playwright driver can complain
+    import signal
+    import os as _os
+
+    def _graceful_exit(signum, frame):
+        """Exit immediately on SIGTERM without letting Playwright complain."""
+        try:
+            # Send partial result if queue is still open
+            q.put_nowait({'ok': False, 'error': 'Process terminated'})
+        except Exception:
+            pass
+        # Use os._exit() to skip Python cleanup which would let Playwright print EPIPE
+        _os._exit(0)
+
+    try:
+        signal.signal(signal.SIGTERM, _graceful_exit)
+    except Exception:
+        pass  # Ignore if signal handling fails
+
     try:
 
         # Wrap stdout/stderr to suppress known Cloudflare progress lines
