@@ -489,5 +489,68 @@ def get_running_main_instances() -> int:
 - Keep sessions focused on specific objectives
 
 ---
+
+## Critical Planning Guidelines (WAJIB untuk AI Assistant)
+
+### Risk Assessment Requirements
+Setiap plan/proposal dari AI Assistant **HARUS** menyertakan analisis risiko berikut:
+
+#### 1. Potensi Break
+- Fitur existing yang bisa rusak akibat perubahan
+- Edge cases yang tidak ter-handle
+- Dependencies yang terpengaruh (imports, function calls, shared state)
+- Integration points dengan module lain
+
+#### 2. Potensi Error
+- Runtime errors yang mungkin muncul
+- Exception handling yang perlu ditambah
+- Error scenarios dan recovery plan
+- Unhandled edge cases
+
+#### 3. Potensi Data Corruption
+- File I/O race conditions
+- Partial writes / incomplete data
+- Encoding issues (UTF-8, Shift-JIS, etc.)
+- State inconsistency antar proses/thread
+- Database/file locking issues
+
+#### 4. Logic Changes Impact
+- Existing logic yang berubah behavior (breaking change)
+- Side effects ke module lain
+- Backward compatibility concerns
+- Breaking changes untuk user workflow
+- Performance implications
+
+### Template Risk Analysis (WAJIB diisi)
+
+| Risk Category | Description | Severity | Mitigation |
+|---------------|-------------|----------|------------|
+| **Break** | [Apa yang bisa rusak?] | Low/Med/High | [Cara mencegah] |
+| **Error** | [Error apa yang mungkin?] | Low/Med/High | [Exception handling] |
+| **Corruption** | [Data apa yang bisa corrupt?] | Low/Med/High | [Safeguard] |
+| **Logic Change** | [Behavior apa yang berubah?] | Low/Med/High | [Backward compat plan] |
+
+### Contoh Risk Analysis yang Baik
+
+```markdown
+## Risk Analysis: Implement Resume/Checkpoint System
+
+| Risk Category | Description | Severity | Mitigation |
+|---------------|-------------|----------|------------|
+| **Break** | Producer-consumer queue bisa inconsistent jika resume dari checkpoint | High | Flush queue sebelum checkpoint, validate state saat load |
+| **Error** | FileNotFoundError jika checkpoint file corrupt/missing | Medium | Try-except dengan fallback ke fresh start |
+| **Corruption** | Partial checkpoint write jika crash mid-save | High | Atomic write (write to temp, then rename) |
+| **Logic Change** | Output file sekarang append bukan overwrite | Medium | Add CLI flag --fresh untuk force overwrite |
+```
+
+### Checklist Sebelum Implement
+
+- [ ] Risk analysis sudah lengkap (4 kategori)
+- [ ] Severity sudah dinilai dengan jujur
+- [ ] Mitigation plan sudah ada untuk High severity
+- [ ] Rollback strategy sudah dipikirkan
+- [ ] Testing plan sudah ada
+
+---
 **File Created**: [DATE]
 **Last Updated**: [DATE] by [Developer Name]
