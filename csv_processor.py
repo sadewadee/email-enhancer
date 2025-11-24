@@ -521,6 +521,20 @@ class CSVProcessor:
             # Set success status
             if result['emails'] or result['phones'] or result['whatsapp']:
                 result['status'] = 'success'
+                # Log extracted contacts (only to file, not CLI)
+                try:
+                    domain = urlparse(url).netloc
+                    parts = []
+                    if result['emails']:
+                        parts.append(f"email: {', '.join(result['emails'][:5])}")
+                    if result['whatsapp']:
+                        parts.append(f"wa: {', '.join(result['whatsapp'][:3])}")
+                    if result['phones']:
+                        parts.append(f"telp: {', '.join(result['phones'][:3])}")
+                    if parts:
+                        self.logger.debug(f"✓ {domain} → {' | '.join(parts)}")
+                except Exception:
+                    pass  # Don't fail on logging errors
             else:
                 result['status'] = 'no_contacts_found'
 

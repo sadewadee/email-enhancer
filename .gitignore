@@ -67,11 +67,12 @@ sampler.txt
 #Others
 datas/
 country/
+countr/
 logs/
 results/
-yoga-singapore.csv
+*.csv
 *.json
 # Backup files
 backup/
 *.backup*
-japan.csv
+*.bak
