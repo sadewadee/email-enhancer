@@ -685,7 +685,7 @@ class CSVProcessor:
             mandatory_cols = [
                 'No', 'name', 'street', 'city', 'country_code', 'url',
                 'phone_number', 'google_business_categories',
-                'facebook', 'instagram'
+                'facebook', 'instagram', 'tiktok', 'youtube'
             ]
 
             # Redirect tracking columns
