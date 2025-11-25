@@ -756,6 +756,23 @@ class ContactExtractor:
         if any(tok in lcl for tok in suspicious_tokens):
             return False
 
+        # CRITICAL: Reject emails with embedded state codes + phone numbers (malformed parsing)
+        # Pattern: 2-letter state code at start + phone number + location name
+        # Examples: "ca949-509-1050losangeles", "il847-332-1018evanston"
+        if re.match(r'^[a-z]{2}\d{3}-?\d{3}-?\d{4}', lcl):
+            # Matches pattern like "ca9495091050" or "ca949-509-1050" at start
+            return False
+
+        # Also reject if it contains the phone number pattern anywhere (robustness)
+        if re.search(r'\d{3}-?\d{3}-?\d{4}.*[a-z]{2,}$', lcl):
+            # Matches pattern like "1234567890cityname" anywhere in local-part
+            return False
+
+        # Reject if starts with state code followed immediately by numbers
+        if re.match(r'^[a-z]{2}\d+', lcl):
+            # e.g., "ca949509..." likely state + phone concatenation
+            return False
+
         # Reject excessive repetition of the same token (e.g., 'malta.malta.malta')
         tokens = re.split(r'[._+-]+', lcl)
         # Count repetitions ignoring empty tokens
