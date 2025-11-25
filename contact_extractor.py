@@ -39,6 +39,22 @@ class ContactExtractor:
             re.compile(r'whatsapp://send\?phone=(\+?\d+)', re.IGNORECASE),
         ]
 
+        # Social media patterns - matches URLs and extracts handles/usernames
+        self.social_patterns = {
+            'facebook': [
+                re.compile(r'(?:https?://)?(?:www\.)?(?:facebook\.com|fb\.com)/([^/?#\s&]+)', re.IGNORECASE),
+            ],
+            'instagram': [
+                re.compile(r'(?:https?://)?(?:www\.)?instagram\.com/([^/?#\s&]+)', re.IGNORECASE),
+            ],
+            'tiktok': [
+                re.compile(r'(?:https?://)?(?:www\.)?tiktok\.com/@?([^/?#\s&]+)', re.IGNORECASE),
+            ],
+            'youtube': [
+                re.compile(r'(?:https?://)?(?:www\.)?youtube\.com/(?:channel/|c/|@|user/)?([^/?#\s&]+)', re.IGNORECASE),
+            ],
+        }
+
         # Email obfuscation patterns (restricted to safe variants)
         # Avoid broad replacements like "at"/"dot" without boundaries which caused false positives
         self.obfuscation_patterns = {
@@ -441,6 +457,111 @@ class ContactExtractor:
 
         return unique_whatsapp
 
+    def extract_social_media(self, html: str, base_url: str = "") -> List[Dict]:
+        """
+        Extract social media profile URLs from HTML content.
+
+        Only extracts the FIRST occurrence per platform to avoid duplicates.
+
+        Args:
+            html (str): HTML content as string
+            base_url (str): Base URL for context
+
+        Returns:
+            List[Dict]: List of social media dictionaries with metadata (max 1 per platform)
+        """
+        social_contacts = []
+        html_str = html or ""
+        is_html = self._is_html_like(html_str)
+        soup = BeautifulSoup(html_str, 'html.parser') if is_html else None
+
+        # Track first occurrence per platform
+        found_platforms = {}
+
+        # Extract from links
+        if is_html and soup is not None:
+            all_links = soup.find_all('a', href=True)
+            for link in all_links:
+                href = link.get('href', '')
+
+                # Check each platform
+                for platform, patterns in self.social_patterns.items():
+                    # Skip if already found for this platform
+                    if platform in found_platforms:
+                        continue
+
+                    for pattern in patterns:
+                        match = pattern.search(href)
+                        if match:
+                            # Extract username/handle
+                            username = match.group(1) if match.lastindex else ""
+                            if username and username.strip():
+                                # Construct the full URL
+                                if platform == 'facebook':
+                                    full_url = f"https://facebook.com/{username}"
+                                elif platform == 'instagram':
+                                    full_url = f"https://instagram.com/{username}"
+                                elif platform == 'tiktok':
+                                    # Ensure @ prefix for TikTok
+                                    username_clean = username.lstrip('@')
+                                    full_url = f"https://tiktok.com/@{username_clean}"
+                                elif platform == 'youtube':
+                                    full_url = f"https://youtube.com/{username}"
+                                else:
+                                    full_url = href
+
+                                social_contacts.append({
+                                    'field': 'social_media',
+                                    'platform': platform,
+                                    'username': username,
+                                    'url': full_url,
+                                    'contact_source_page': href,
+                                    'source_url': base_url
+                                })
+                                found_platforms[platform] = True
+                                break
+
+        # Extract from text content (backup method)
+        text_content = soup.get_text() if is_html and soup is not None else html_str
+
+        for platform, patterns in self.social_patterns.items():
+            # Skip if already found for this platform
+            if platform in found_platforms:
+                continue
+
+            for pattern in patterns:
+                matches = pattern.findall(text_content)
+                if matches:
+                    # Take first match only
+                    username = matches[0] if isinstance(matches[0], str) else matches[0][0] if isinstance(matches[0], tuple) else ""
+                    if username and username.strip():
+                        # Construct the full URL
+                        if platform == 'facebook':
+                            full_url = f"https://facebook.com/{username}"
+                        elif platform == 'instagram':
+                            full_url = f"https://instagram.com/{username}"
+                        elif platform == 'tiktok':
+                            username_clean = username.lstrip('@')
+                            full_url = f"https://tiktok.com/@{username_clean}"
+                        elif platform == 'youtube':
+                            full_url = f"https://youtube.com/{username}"
+                        else:
+                            full_url = ""
+
+                        if full_url:
+                            social_contacts.append({
+                                'field': 'social_media',
+                                'platform': platform,
+                                'username': username,
+                                'url': full_url,
+                                'contact_source_page': text_content[:100],  # First 100 chars as reference
+                                'source_url': base_url
+                            })
+                            found_platforms[platform] = True
+                            break
+
+        return social_contacts
+
     def _normalize_email(self, email: str) -> Optional[str]:
         """Normalize email address and strip any trailing/leading non-email tokens.
 
@@ -775,5 +896,9 @@ class ContactExtractor:
         # Extract WhatsApp
         whatsapp = self.extract_whatsapp(html, base_url)
         all_contacts.extend(whatsapp)
+
+        # Extract social media
+        social_media = self.extract_social_media(html, base_url)
+        all_contacts.extend(social_media)
 
         return all_contacts

@@ -2084,6 +2084,10 @@ class WebScraper:
             'emails': [],
             'phones': [],
             'whatsapp': [],
+            'facebook': '',
+            'instagram': '',
+            'tiktok': '',
+            'youtube': '',
             'pages_scraped': [],
             'status': 'failed',
             'error': None
@@ -2118,7 +2122,7 @@ class WebScraper:
                 contacts = extractor.extract_all_contacts(str(section), main_result['final_url'])
                 for contact in contacts:
                     field = contact.get('field')
-                    value = contact.get('value_normalized') or contact.get('value_raw')
+                    value = contact.get('value_normalized') or contact.get('value_raw') or contact.get('url')
                     if not value:
                         continue
                     if field == 'email':
@@ -2127,6 +2131,11 @@ class WebScraper:
                         result['phones'].append(value)
                     elif field == 'whatsapp':
                         result['whatsapp'].append(value)
+                    elif field == 'social_media':
+                        platform = contact.get('platform')
+                        # Only set if not already set (first occurrence only)
+                        if platform in ['facebook', 'instagram', 'tiktok', 'youtube'] and not result.get(platform):
+                            result[platform] = value
 
             # 2) Footer scan
             footer_selectors = 'footer, #footer, .footer, .site-footer, .main-footer'
@@ -2134,7 +2143,7 @@ class WebScraper:
                 contacts = extractor.extract_all_contacts(str(section), main_result['final_url'])
                 for contact in contacts:
                     field = contact.get('field')
-                    value = contact.get('value_normalized') or contact.get('value_raw')
+                    value = contact.get('value_normalized') or contact.get('value_raw') or contact.get('url')
                     if not value:
                         continue
                     if field == 'email':
@@ -2143,6 +2152,11 @@ class WebScraper:
                         result['phones'].append(value)
                     elif field == 'whatsapp':
                         result['whatsapp'].append(value)
+                    elif field == 'social_media':
+                        platform = contact.get('platform')
+                        # Only set if not already set (first occurrence only)
+                        if platform in ['facebook', 'instagram', 'tiktok', 'youtube'] and not result.get(platform):
+                            result[platform] = value
 
             # 3) Structured data (JSON-LD) scan
             structured = self.extract_structured_data(main_result['html'])
@@ -2155,7 +2169,7 @@ class WebScraper:
             main_contacts = extractor.extract_all_contacts(main_result['html'])
             for contact in main_contacts:
                 field = contact.get('field')
-                value = contact.get('value_normalized') or contact.get('value_raw')
+                value = contact.get('value_normalized') or contact.get('value_raw') or contact.get('url')
                 if not value:
                     continue
                 if field == 'email':
@@ -2164,6 +2178,11 @@ class WebScraper:
                     result['phones'].append(value)
                 elif field == 'whatsapp':
                     result['whatsapp'].append(value)
+                elif field == 'social_media':
+                    platform = contact.get('platform')
+                    # Only set if not already set (first occurrence only)
+                    if platform in ['facebook', 'instagram', 'tiktok', 'youtube'] and not result.get(platform):
+                        result[platform] = value
             result['pages_scraped'].append({
                 'url': main_result['final_url'],
                 'title': main_result.get('page_title', ''),
@@ -2196,7 +2215,7 @@ class WebScraper:
                         contacts = extractor.extract_all_contacts(str(section), contact_result['final_url'])
                         for contact in contacts:
                             field = contact.get('field')
-                            value = contact.get('value_normalized') or contact.get('value_raw')
+                            value = contact.get('value_normalized') or contact.get('value_raw') or contact.get('url')
                             if not value:
                                 continue
                             if field == 'email':
@@ -2205,12 +2224,17 @@ class WebScraper:
                                 result['phones'].append(value)
                             elif field == 'whatsapp':
                                 result['whatsapp'].append(value)
+                            elif field == 'social_media':
+                                platform = contact.get('platform')
+                                # Only set if not already set (first occurrence only)
+                                if platform in ['facebook', 'instagram', 'tiktok', 'youtube'] and not result.get(platform):
+                                    result[platform] = value
 
                     for section in cp_soup.select(footer_selectors):
                         contacts = extractor.extract_all_contacts(str(section), contact_result['final_url'])
                         for contact in contacts:
                             field = contact.get('field')
-                            value = contact.get('value_normalized') or contact.get('value_raw')
+                            value = contact.get('value_normalized') or contact.get('value_raw') or contact.get('url')
                             if not value:
                                 continue
                             if field == 'email':
@@ -2219,12 +2243,17 @@ class WebScraper:
                                 result['phones'].append(value)
                             elif field == 'whatsapp':
                                 result['whatsapp'].append(value)
+                            elif field == 'social_media':
+                                platform = contact.get('platform')
+                                # Only set if not already set (first occurrence only)
+                                if platform in ['facebook', 'instagram', 'tiktok', 'youtube'] and not result.get(platform):
+                                    result[platform] = value
 
                     # Finally, general page scan
                     contact_contacts = extractor.extract_all_contacts(contact_result['html'])
                     for contact in contact_contacts:
                         field = contact.get('field')
-                        value = contact.get('value_normalized') or contact.get('value_raw')
+                        value = contact.get('value_normalized') or contact.get('value_raw') or contact.get('url')
                         if not value:
                             continue
                         if field == 'email':
@@ -2233,6 +2262,11 @@ class WebScraper:
                             result['phones'].append(value)
                         elif field == 'whatsapp':
                             result['whatsapp'].append(value)
+                        elif field == 'social_media':
+                            platform = contact.get('platform')
+                            # Only set if not already set (first occurrence only)
+                            if platform in ['facebook', 'instagram', 'tiktok', 'youtube'] and not result.get(platform):
+                                result[platform] = value
                     result['pages_scraped'].append({
                         'url': contact_result['final_url'],
                         'title': contact_result.get('page_title', ''),
