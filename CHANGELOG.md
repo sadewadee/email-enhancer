@@ -21,11 +21,17 @@
                 - Solusi: Add 'tiktok', 'youtube' ke mandatory_cols list di csv_processor.py line 688
                 - Impact: CSV sekarang correctly export semua 4 social media columns + data rows
 
+            - **Malformed Email Extraction**: 200+ invalid emails dari concatenated contact directory data
+                - Penyebab: Websites dengan poorly formatted HTML merge state codes + phone numbers + location names into email local-parts
+                - Contoh: `ca949-509-1050losangeles@us.artofliving.org`, `il847-332-1018evanston@us.artofliving.org`
+                - Solusi: Enhanced validation dengan 3 regex checks untuk detect dan reject state+phone patterns
+                - Impact: Filters malformed emails sambil keeping legitimate organizational emails (info@, contact@, etc.)
+
         - Technical Details
             - Root cause identified: Social media tidak diekstrak dari HTML, hanya pass-through dari CSV
             - Solution: Multi-layer extraction (link scan → text fallback) dengan first-match-only tracking
             - Impact: Sekarang dapat mengisi facebook/instagram/tiktok/youtube field dari scraping hasil, tidak hanya dari CSV input
-            - Files modified: contact_extractor.py (+125 lines), web_scraper.py (+46 lines), csv_processor.py (+6 lines original, +1 line fix)
+            - Files modified: contact_extractor.py (+125 lines original, +17 lines validation fix), web_scraper.py (+46 lines), csv_processor.py (+6 lines original, +1 line fix)
             - Backward compatible: semua field optional, tidak break existing workflow
 
 ##### [0.1.3] - 2025-11-22
