@@ -1,3 +1,26 @@
+##### [0.1.4] - 2025-11-25
+
+        - Added
+            - **Social Media Extraction**: Ekstrak Facebook, Instagram, TikTok, YouTube dari website HTML
+                - Baru method `extract_social_media()` di ContactExtractor untuk mengambil social media profiles
+                - Hanya mengambil first occurrence per platform (deduplication otomatis)
+                - Support multiple format: facebook.com/, instagram.com/, tiktok.com/@, youtube.com/channel/c/@/user/
+                - Ekstrak dari `<a>` tags (prioritas) dan text content (fallback)
+                - Integrasi ke `gather_contact_info()` di web_scraper dengan scanning order: header → footer → general page → contact pages
+                - CSV output sekarang mencakup facebook, instagram, tiktok, youtube fields (prefer scraped data over CSV input)
+
+            - **Improved URL Handling**: Normalisasi dan reconstruct URLs dengan proper format
+                - TikTok: auto-add @ prefix jika missing
+                - YouTube: handle channel/, c/, @, user/ formats
+                - Extract username/handle dari URL untuk metadata
+
+        - Technical Details
+            - Root cause identified: Social media tidak diekstrak dari HTML, hanya pass-through dari CSV
+            - Solution: Multi-layer extraction (link scan → text fallback) dengan first-match-only tracking
+            - Impact: Sekarang dapat mengisi facebook/instagram/tiktok/youtube field dari scraping hasil, tidak hanya dari CSV input
+            - Files modified: contact_extractor.py (+125 lines), web_scraper.py (+46 lines), csv_processor.py (+6 lines)
+            - Backward compatible: semua field optional, tidak break existing workflow
+
 ##### [0.1.3] - 2025-11-22
 
         - Fixed (CRITICAL: Unkillable Process & Infinite Spawn Loop)
