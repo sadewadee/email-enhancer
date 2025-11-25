@@ -14,11 +14,18 @@
                 - YouTube: handle channel/, c/, @, user/ formats
                 - Extract username/handle dari URL untuk metadata
 
+        - Fixed
+            - **CSV Export Silent Failure**: TikTok dan YouTube columns tidak ditulis ke CSV (0 rows output)
+                - Penyebab: `csv.DictWriter` fieldnames list tidak include 'tiktok', 'youtube' fields
+                - Setiap row yang punya fields tidak in fieldnames di-skip dengan silent error
+                - Solusi: Add 'tiktok', 'youtube' ke mandatory_cols list di csv_processor.py line 688
+                - Impact: CSV sekarang correctly export semua 4 social media columns + data rows
+
         - Technical Details
             - Root cause identified: Social media tidak diekstrak dari HTML, hanya pass-through dari CSV
             - Solution: Multi-layer extraction (link scan → text fallback) dengan first-match-only tracking
             - Impact: Sekarang dapat mengisi facebook/instagram/tiktok/youtube field dari scraping hasil, tidak hanya dari CSV input
-            - Files modified: contact_extractor.py (+125 lines), web_scraper.py (+46 lines), csv_processor.py (+6 lines)
+            - Files modified: contact_extractor.py (+125 lines), web_scraper.py (+46 lines), csv_processor.py (+6 lines original, +1 line fix)
             - Backward compatible: semua field optional, tidak break existing workflow
 
 ##### [0.1.3] - 2025-11-22
