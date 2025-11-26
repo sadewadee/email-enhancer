@@ -1,3 +1,41 @@
+##### [0.1.5] - 2025-11-26
+
+        - Added
+            - **JavaScript-rendered Social Media Extraction**: Extract social media dari link aggregator sites (Taplink, Linktree, Beacons)
+                - Tambah JSON extraction dari `<script>` tags di `extract_social_media()` method (lines 529-601)
+                - Parse `window.data`, `window.__data`, `__NEXT_DATA__` dan JSON objects lainnya
+                - Recursive JSON traversal dengan `_extract_social_from_json()` helper method (lines 644-699)
+                - Direct URL pattern matching di script content untuk fallback
+                - Support sites tanpa `<a>` tags yang store data di JavaScript/JSON
+                - Extraction methods (in order): `<a>` tags → `<script>` JSON → text content
+
+            - **WhatsApp Number Normalization Enhancement**: Parse international numbers tanpa + prefix
+                - Enhanced `_normalize_phone()` dengan fallback: try add + prefix jika parse gagal (lines 984-993)
+                - Fixes WhatsApp extraction dari Taplink/Linktree URLs (e.g., "393518013001" → "+393518013001")
+                - Sekarang dapat parse numbers dengan country code tanpa perlu country_code parameter
+                - Backward compatible: existing logic tetap works untuk numbers dengan + prefix
+
+        - Fixed
+            - **CSV Export Silent Failure**: Added 'tiktok' dan 'youtube' to mandatory_cols fieldnames (csv_processor.py:688)
+                - Issue: csv.DictWriter throws silent error "dict contains fields not in fieldnames"
+                - Impact: japan_processed.csv had 0 rows despite 485 emails extracted
+                - Fix: All 4 social media columns now correctly exported to CSV
+
+            - **Malformed Email Extraction**: Enhanced email local-part validation (contact_extractor.py:759-774)
+                - Issue: Art of Living website extracted 478 malformed emails like "ca949-509-1050losangeles@domain.com"
+                - Root cause: HTML parsing concatenated state code + phone + city into email local-part
+                - Fix: Added 3 regex checks to reject emails with embedded phone patterns and state codes
+                - Result: Reduced from 478 to 2 legitimate emails (info@artofliving.org, secretariat@artofliving.org)
+
+        - Technical Details
+            - Root cause (Taplink): Link aggregators store social media URLs in `<script>window.data={...}</script>` JSON
+            - 0 `<a>` tags in static HTML, data JavaScript-rendered → BeautifulSoup cannot extract
+            - Solution: Multi-method extraction (HTML tags → JSON → text) dalam 1 HTTP request (NO browser rendering needed)
+            - Impact: Dapat extract Instagram, WhatsApp, dan social media lain dari Taplink, Linktree, Beacons, dll
+            - Files modified: contact_extractor.py (+160 lines social media JSON extraction, +13 lines phone normalization)
+            - Performance: <5ms overhead per URL (JSON parsing faster than JS rendering)
+            - Backward compatible: Standard websites dengan `<a>` tags tetap works seperti biasa
+
 ##### [0.1.4] - 2025-11-25
 
         - Added

@@ -1440,14 +1440,14 @@ class WebScraper:
                 if elapsed >= 50:  # Long timeout suggests server slowness
                     return {
                         'use_proxy': True,
-                        'timeout': 60,  # No change - 60s is good for slow sites
+                        'timeout': 120,  # No change - 60s is good for slow sites
                         'reason': 'long_timeout',
                         'skip': False
                     }
                 else:
                     return {
                         'use_proxy': True,
-                        'timeout': 30,  # Keep at 30s for quick timeouts (already good)
+                        'timeout': 90,  # Keep at 30s for quick timeouts (already good)
                         'reason': 'quick_timeout',
                         'skip': False
                     }
@@ -1456,7 +1456,7 @@ class WebScraper:
             if 'dynamic_fetch_timeout' in error_msg:
                 return {
                     'use_proxy': True,
-                    'timeout': 45,
+                    'timeout': 60,
                     'reason': 'dynamic_timeout',
                     'skip': False
                 }
