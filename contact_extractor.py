@@ -554,32 +554,20 @@ class ContactExtractor:
                 # Common patterns: window.data = {...}, window.__NEXT_DATA__ = {...}, var config = {...}
                 import json
 
-                # Pattern 1: window.data = {...}
+                # Pattern 1: window.data = {...} using optimized JSONDecoder
                 if 'window.data' in script_content or 'window.__data' in script_content:
                     try:
-                        # Extract JSON portion
+                        # Extract JSON portion using robust raw_decode
                         start_idx = script_content.find('{')
                         if start_idx != -1:
-                            # Find matching closing brace
-                            brace_count = 0
-                            end_idx = start_idx
-                            for i in range(start_idx, len(script_content)):
-                                if script_content[i] == '{':
-                                    brace_count += 1
-                                elif script_content[i] == '}':
-                                    brace_count -= 1
-                                    if brace_count == 0:
-                                        end_idx = i + 1
-                                        break
-
-                            if end_idx > start_idx:
-                                json_str = script_content[start_idx:end_idx]
-                                try:
-                                    data = json.loads(json_str)
-                                    # Recursively search for social media URLs in JSON
-                                    self._extract_social_from_json(data, found_platforms, social_contacts, base_url)
-                                except json.JSONDecodeError:
-                                    pass
+                            try:
+                                # Use JSONDecoder.raw_decode() for efficient parsing with automatic brace matching
+                                decoder = json.JSONDecoder()
+                                data, _ = decoder.raw_decode(script_content, start_idx)
+                                # Recursively search for social media URLs in JSON
+                                self._extract_social_from_json(data, found_platforms, social_contacts, base_url)
+                            except json.JSONDecodeError:
+                                pass
                     except Exception:
                         pass
 
