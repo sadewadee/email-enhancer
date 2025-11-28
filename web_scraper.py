@@ -728,16 +728,22 @@ def _subprocess_fetch(q, url, headless, solve_cloudflare, network_idle, google_s
             # This runs AFTER network_idle, ensuring all JS observers are registered
             try:
                 # Smooth scroll to bottom to trigger lazy load observers
+                # OPTIMIZED: Reduced scroll delay from 300ms to 100ms and final wait from 2s to 500ms
+                # Added max scroll time of 3s to prevent infinite scroll on problematic sites
                 page.evaluate("""
                     async () => {
                         // Scroll to bottom in steps to trigger all lazy load observers
                         const scrollStep = window.innerHeight;
-                        const scrollDelay = 300; // ms between scrolls
+                        const scrollDelay = 100; // OPTIMIZED: Changed from 300ms to 100ms
 
                         const totalHeight = document.body.scrollHeight;
                         let currentScroll = 0;
 
-                        while (currentScroll < totalHeight) {
+                        // OPTIMIZED: Add maximum scroll time to prevent infinite scroll
+                        const maxScrollTime = 3000; // Max 3 seconds for scrolling
+                        const startTime = Date.now();
+
+                        while (currentScroll < totalHeight && (Date.now() - startTime) < maxScrollTime) {
                             window.scrollBy(0, scrollStep);
                             currentScroll += scrollStep;
                             await new Promise(resolve => setTimeout(resolve, scrollDelay));
@@ -746,8 +752,8 @@ def _subprocess_fetch(q, url, headless, solve_cloudflare, network_idle, google_s
                         // Ensure we're at the very bottom
                         window.scrollTo(0, document.body.scrollHeight);
 
-                        // Wait for lazy-loaded content to render (2 seconds)
-                        await new Promise(resolve => setTimeout(resolve, 2000));
+                        // OPTIMIZED: Wait for lazy-loaded content to render (reduced from 2s to 500ms)
+                        await new Promise(resolve => setTimeout(resolve, 500));
                     }
                 """)
 
@@ -835,10 +841,10 @@ class WebScraper:
                  headless: bool = True,
                  solve_cloudflare: bool = True,
                  timeout: int = 30,
-                 network_idle: bool = True,
+                 network_idle: bool = False,  # CHANGED: Default to FALSE (prevent indefinite waits on sites with persistent connections)
                  block_images: bool = False,
                  disable_resources: bool = False,
-                 static_first: bool = True,
+                 static_first: bool = False,  # CHANGED: Default to FALSE (disable static fetch, sites mostly need JS rendering)
                  cf_wait_timeout: int = 60,
                  skip_on_challenge: bool = False,
                  proxy_file: str = "proxy.txt",
@@ -1635,13 +1641,13 @@ class WebScraper:
 
         # Acquire browser semaphore to limit concurrent browser instances
         # This prevents Camoufox crashes from too many concurrent processes
-        # Timeout = scraping timeout + 30s buffer (dynamic based on page complexity)
-        semaphore_timeout = self.timeout + 30
+        # CHANGED: Fixed semaphore timeout to 60s (was timeout + 30, which caused cascading failures)
+        semaphore_timeout = 60  # Fixed timeout instead of dynamic (timeout + 30)
         acquired = False
         try:
             acquired = self.browser_semaphore.acquire(timeout=semaphore_timeout)
             if not acquired:
-                self.logger.warning(f"Browser semaphore timeout for {url} after {semaphore_timeout}s - increase --workers or reduce concurrent load")
+                self.logger.warning(f"Browser semaphore timeout for {url} after {semaphore_timeout}s - increase --max-browsers or reduce concurrent load")
                 return None
 
             result_q = multiprocessing.Queue()
