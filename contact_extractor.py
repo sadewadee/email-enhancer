@@ -34,15 +34,20 @@ class ContactExtractor:
             r'\b[A-Za-z][A-Za-z0-9._%+-]*@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b'
         )
 
-        # Phone number patterns - using proven patterns from sampler.txt
-        self.phone_patterns = [
-            re.compile(r'(\+?\d{1,3}[-.\s]?)?\(?\d{2,3}?\)?[-.\s]?\d{3}[-.\s]?\d{4}'),
-            re.compile(r'\d{2,3}[-.\s]?\d{3}[-.\s]?\d{4}'),
-            re.compile(r'((?:\d{2,3}|\(\d{2,3}\))?(?:\s|-|\.)?\d{3,4}(?:\s|-|\.)?\d{4})'),
-            re.compile(r'\d{4}[-.\s]?\d{3}[-.\s]?\d{3}'),
-            re.compile(r'(\+\d{1,3}[- ]?)?\(?\d{1,4}?\)?[- ]?\d{1,4}[- ]?\d{1,4}[- ]?\d{1,4}'),
-            re.compile(r'tel:[\+\d\-\(\)\s\.]+'),     # Tel links
-        ]
+        # Phone number pattern - optimized single regex combining all 6 patterns
+        # Matches: +1(234)567-8900, (234) 567-8900, 234-567-8900, tel: links, etc.
+        self.phone_pattern = re.compile(
+            r'(?:tel:)?'  # Optional tel: prefix
+            r'(?:'
+            r'(?:\+?\d{1,3}[-.\s]?)?'  # Optional country code
+            r'\(?(?:\d{2,4}|[0-9().\s\-]{3,10})\)?'  # Area code (various formats)
+            r'(?:[-.\s]?(?:\d{3,4}))?'  # Prefix
+            r'(?:[-.\s]?(?:\d{3,4}))?'  # Line number
+            r'|'
+            r'[\+\d\-\(\)\s\.]{10,}'  # Tel link format
+            r')',
+            re.VERBOSE
+        )
 
         # WhatsApp patterns
         self.whatsapp_patterns = [
@@ -360,22 +365,21 @@ class ContactExtractor:
         # Extract from text content - simplified approach like sampler.txt
         text_content = soup.get_text() if is_html and soup is not None else html_str
 
-        # Find potential phone numbers using all patterns
+        # Find potential phone numbers using optimized single pattern
         all_phone_matches = set()
-        for pattern in self.phone_patterns:
-            matches = pattern.findall(text_content)
-            for match in matches:
-                # Handle tuple results from regex groups
-                if isinstance(match, tuple):
-                    # Take the full match (first element) or the longest non-empty element
-                    phone_str = match[0] if match[0] else max(match, key=len) if any(match) else ""
-                else:
-                    phone_str = match
+        matches = self.phone_pattern.findall(text_content)
+        for match in matches:
+            # Handle tuple results from regex groups
+            if isinstance(match, tuple):
+                # Take the full match (first element) or the longest non-empty element
+                phone_str = match[0] if match[0] else max(match, key=len) if any(match) else ""
+            else:
+                phone_str = match
 
-                # Clean up the match
-                phone_str = phone_str.replace('tel:', '').strip()
-                if phone_str and len(phone_str) >= 7:  # Minimum phone length
-                    all_phone_matches.add(phone_str)
+            # Clean up the match
+            phone_str = phone_str.replace('tel:', '').strip()
+            if phone_str and len(phone_str) >= 7:  # Minimum phone length
+                all_phone_matches.add(phone_str)
 
         # Process all unique phone matches
         for raw_phone in all_phone_matches:
