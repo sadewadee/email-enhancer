@@ -46,7 +46,7 @@ class EmailScraperValidator:
             timeout=self.config['timeout'],
             block_images=self.config.get('block_images', True),
             disable_resources=self.config.get('disable_resources', False),
-            network_idle=self.config.get('network_idle', True),
+            network_idle=self.config.get('network_idle', False),  # FIXED: Default to False (Phase 1A requirement)
             cf_wait_timeout=self.config.get('cf_wait_timeout', 30),
             skip_on_challenge=self.config.get('skip_on_challenge', False),
             proxy_file=self.config.get('proxy_file', 'proxy.txt'),
@@ -93,7 +93,7 @@ class EmailScraperValidator:
             # Default light-load behavior
             'block_images': True,
             'disable_resources': False,
-            'network_idle': True,
+            'network_idle': False,  # FIXED: Default to False (Phase 1A - prevent indefinite waits on sites with persistent connections)
             # Proxy configuration
             'proxy_file': 'proxy.txt'
         }
@@ -580,8 +580,8 @@ def create_config_from_args(args) -> Dict[str, Any]:
         # Safe light-load default: block_images ON, disable_resources OFF; --no-light-load disables both
         'block_images': False if getattr(args, 'no_light_load', False) else True,
         'disable_resources': True if getattr(args, 'no_light_load', False) else False,
-        # Network idle control for Cloudflare wait page/long-polling sites
-        'network_idle': False if getattr(args, 'no_network_idle', False) else True,
+        # Network idle control for Cloudflare wait page/long-polling sites (Phase 1A: default False)
+        'network_idle': True if getattr(args, 'network_idle', False) else False,  # FIXED: Default False, can be enabled with --network-idle flag
         # Proxy configuration
         'proxy_file': getattr(args, 'proxy_file', 'proxy.txt'),
         # Budget configuration for time-based retry management
