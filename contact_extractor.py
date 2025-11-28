@@ -499,6 +499,51 @@ class ContactExtractor:
         # Track first occurrence per platform
         found_platforms = {}
 
+        # METHOD 0: Extract from meta tags (og:url, twitter:site, etc.)
+        if is_html and soup is not None:
+            meta_tags = soup.find_all('meta')
+            for meta in meta_tags:
+                property_val = meta.get('property', '').lower()
+                content = meta.get('content', '')
+
+                # Skip if platform already found or no content
+                if not content:
+                    continue
+
+                # Check each platform
+                for platform, patterns in self.social_patterns.items():
+                    if platform in found_platforms:
+                        continue
+
+                    for pattern in patterns:
+                        match = pattern.search(content)
+                        if match:
+                            username = match.group(1) if match.lastindex else ""
+                            if username and username.strip():
+                                # Construct the full URL
+                                if platform == 'facebook':
+                                    full_url = f"https://facebook.com/{username}"
+                                elif platform == 'instagram':
+                                    full_url = f"https://instagram.com/{username}"
+                                elif platform == 'tiktok':
+                                    username_clean = username.lstrip('@')
+                                    full_url = f"https://tiktok.com/@{username_clean}"
+                                elif platform == 'youtube':
+                                    full_url = f"https://youtube.com/{username}"
+                                else:
+                                    continue
+
+                                social_contacts.append({
+                                    'field': 'social_media',
+                                    'platform': platform,
+                                    'username': username,
+                                    'url': full_url,
+                                    'contact_source_page': 'meta tags',
+                                    'source_url': base_url
+                                })
+                                found_platforms[platform] = True
+                                break
+
         # METHOD 1: Extract from <a> tags (standard websites)
         if is_html and soup is not None:
             all_links = soup.find_all('a', href=True)
@@ -542,6 +587,73 @@ class ContactExtractor:
                                 found_platforms[platform] = True
                                 break
 
+        # METHOD 1B: Enhanced - detect icon-only social links (SVG and img with social keywords)
+        if is_html and soup is not None:
+            for link in soup.find_all('a', href=True):
+                href = link.get('href', '')
+                if not href:
+                    continue
+
+                # Check if link has visual indicators (SVG or img with social keywords)
+                has_icon = False
+                icon_type = None
+
+                # Check for SVG icons
+                if link.find('svg'):
+                    has_icon = True
+                    icon_type = 'svg'
+                    # Try to get SVG title for platform hint
+                    svg = link.find('svg')
+                    if svg:
+                        title = svg.find('title')
+                        if title and title.string:
+                            icon_type = title.string.lower()
+
+                # Check for img icons with social keywords in src/alt
+                elif link.find('img'):
+                    img = link.find('img')
+                    alt_text = img.get('alt', '').lower()
+                    src_text = img.get('src', '').lower()
+
+                    if any(keyword in alt_text or keyword in src_text
+                           for keyword in ['instagram', 'facebook', 'tiktok', 'youtube', 'social', 'follow']):
+                        has_icon = True
+                        icon_type = 'img'
+
+                # If we found an icon-only link, try to extract from href
+                if has_icon:
+                    for platform, patterns in self.social_patterns.items():
+                        if platform in found_platforms:
+                            continue
+
+                        for pattern in patterns:
+                            match = pattern.search(href)
+                            if match:
+                                username = match.group(1) if match.lastindex else ""
+                                if username and username.strip():
+                                    if platform == 'facebook':
+                                        full_url = f"https://facebook.com/{username}"
+                                    elif platform == 'instagram':
+                                        full_url = f"https://instagram.com/{username}"
+                                    elif platform == 'tiktok':
+                                        username_clean = username.lstrip('@')
+                                        full_url = f"https://tiktok.com/@{username_clean}"
+                                    elif platform == 'youtube':
+                                        full_url = f"https://youtube.com/{username}"
+                                    else:
+                                        continue
+
+                                    social_contacts.append({
+                                        'field': 'social_media',
+                                        'platform': platform,
+                                        'username': username,
+                                        'url': full_url,
+                                        'contact_source_page': f'icon link ({icon_type})',
+                                        'source_url': base_url
+                                    })
+                                    found_platforms[platform] = True
+                                    break
+
         # METHOD 2: Extract from <script> JSON data (Taplink, Linktree, Beacons, etc.)
         if is_html and soup is not None:
             script_tags = soup.find_all('script')
@@ -554,12 +666,34 @@ class ContactExtractor:
                 # Common patterns: window.data = {...}, window.__NEXT_DATA__ = {...}, var config = {...}
                 import json
 
-                # Pattern 1: window.data = {...} using optimized JSONDecoder
-                if 'window.data' in script_content or 'window.__data' in script_content:
-                    try:
-                        # Extract JSON portion using robust raw_decode
-                        start_idx = script_content.find('{')
-                        if start_idx != -1:
+                # Pattern 1: Extended JSON variable pattern detection
+                json_patterns = [
+                    'window.data',
+                    'window.__data',
+                    'window.__NEXT_DATA__',
+                    'window.config',
+                    'window.__INITIAL_STATE__',
+                    'window.__APP_STATE__',
+                    'window.INITIAL_STATE',
+                    'var socialLinks',
+                    'const social',
+                    'var contacts',
+                    'const config'
+                ]
+
+                for json_var_pattern in json_patterns:
+                    if json_var_pattern in script_content:
+                        try:
+                            # Find the start of the JSON object
+                            var_idx = script_content.find(json_var_pattern)
+                            if var_idx == -1:
+                                continue
+
+                            # Skip to the opening brace
+                            start_idx = script_content.find('{', var_idx)
+                            if start_idx == -1:
+                                continue
+
                             try:
                                 # Use JSONDecoder.raw_decode() for efficient parsing with automatic brace matching
                                 decoder = json.JSONDecoder()
@@ -568,8 +702,8 @@ class ContactExtractor:
                                 self._extract_social_from_json(data, found_platforms, social_contacts, base_url)
                             except json.JSONDecodeError:
                                 pass
-                    except Exception:
-                        pass
+                        except Exception:
+                            pass
 
                 # Pattern 2: Direct URL pattern matching in script content
                 for platform, patterns in self.social_patterns.items():
