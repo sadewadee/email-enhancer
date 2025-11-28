@@ -2132,7 +2132,8 @@ class WebScraper:
             from contact_extractor import ContactExtractor
             extractor = ContactExtractor()
 
-            soup = BeautifulSoup(main_result['html'], 'html.parser')
+            # CACHE: Parse HTML once and reuse throughout method
+            soup = BeautifulSoup(main_result['html'], self.parser)
 
             # 1) Header-first scan
             header_selectors = 'header, #header, .header, .site-header, .main-header, nav, #nav, .navbar, .navigation'
@@ -2207,8 +2208,7 @@ class WebScraper:
                 'is_contact_page': main_result.get('is_contact_page', False)
             })
 
-            # Look for contact page links
-            soup = BeautifulSoup(main_result['html'], 'html.parser')
+            # Look for contact page links (reuse cached soup object)
             contact_links = self._find_contact_links(soup, main_result['final_url'], self._get_priority_paths())
 
             if contact_links:
