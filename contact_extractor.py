@@ -655,6 +655,10 @@ class ContactExtractor:
             social_contacts: List to append found contacts to
             base_url: Base URL for context
         """
+        # Early exit: if all 4 platforms found, no need to continue traversal
+        if len(found_platforms) >= 4:
+            return
+
         if isinstance(obj, dict):
             for key, value in obj.items():
                 # Check if key suggests social media
@@ -695,11 +699,15 @@ class ContactExtractor:
                                     found_platforms[platform] = True
                                     break
 
-                # Recurse into nested structures
-                self._extract_social_from_json(value, found_platforms, social_contacts, base_url)
+                # Recurse into nested structures (check early exit before recursing)
+                if len(found_platforms) < 4:
+                    self._extract_social_from_json(value, found_platforms, social_contacts, base_url)
 
         elif isinstance(obj, list):
             for item in obj:
+                # Check early exit before each recursion
+                if len(found_platforms) >= 4:
+                    break
                 self._extract_social_from_json(item, found_platforms, social_contacts, base_url)
 
     def _normalize_email(self, email: str) -> Optional[str]:
