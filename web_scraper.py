@@ -852,7 +852,8 @@ class WebScraper:
                  normal_budget: int = 90,
                  challenge_budget: int = 180,
                  dead_site_budget: int = 20,
-                 min_retry_threshold: int = 5):
+                 min_retry_threshold: int = 5,
+                 fast_mode: bool = False):
         """
         Initialize the web scraper.
 
@@ -880,6 +881,7 @@ class WebScraper:
         self.block_images = block_images
         self.disable_resources = disable_resources
         self.static_first = static_first
+        self.fast_mode = fast_mode  # Fast mode: limit extraction for speed
         # Per-URL maximum wait for Cloudflare wait page before skipping
         self.cf_wait_timeout = cf_wait_timeout
         # If True, skip early when a Cloudflare challenge is detected
@@ -2293,6 +2295,13 @@ class WebScraper:
                 result['emails'] = list(set(result['emails']))
             result['phones'] = list(set(result['phones']))
             result['whatsapp'] = list(set(result['whatsapp']))
+
+            # FAST MODE: Limit extraction to speed up processing
+            if self.fast_mode:
+                result['emails'] = result['emails'][:4]  # Max 4 emails
+                result['phones'] = result['phones'][:1]  # Max 1 phone
+                result['whatsapp'] = result['whatsapp'][:1]  # Max 1 WhatsApp
+                # Social media: only keep one profile per platform (already limited in extraction)
 
             # Set status based on results
             if result['emails'] or result['phones'] or result['whatsapp']:

@@ -365,7 +365,7 @@ class CSVProcessor:
     Handles parallel processing of CSV files containing URLs for contact extraction.
     """
 
-    def __init__(self, max_workers: int = 5, timeout: int = 30, block_images: bool = False, disable_resources: bool = False, network_idle: bool = True, cf_wait_timeout: int = 60, skip_on_challenge: bool = False, proxy_file: str = "proxy.txt", max_concurrent_browsers: int = None, normal_budget: int = 60, challenge_budget: int = 120, dead_site_budget: int = 20, min_retry_threshold: int = 5):
+    def __init__(self, max_workers: int = 5, timeout: int = 30, block_images: bool = False, disable_resources: bool = False, network_idle: bool = True, cf_wait_timeout: int = 60, skip_on_challenge: bool = False, proxy_file: str = "proxy.txt", max_concurrent_browsers: int = None, normal_budget: int = 60, challenge_budget: int = 120, dead_site_budget: int = 20, min_retry_threshold: int = 5, fast: bool = False):
         """
         Initialize CSV processor.
 
@@ -383,9 +383,11 @@ class CSVProcessor:
             challenge_budget: Budget for Cloudflare/challenge sites in seconds (default: 120)
             dead_site_budget: Budget for dead sites in seconds (default: 20)
             min_retry_threshold: Minimum remaining budget to attempt retry in seconds (default: 5)
+            fast: Fast mode - limit extraction (1 WA, 1 social profile, 1 phone, 4 emails max)
         """
         self.max_workers = max_workers
         self.timeout = timeout
+        self.fast_mode = fast
 
         # Auto-set max_concurrent_browsers to match max_workers if not specified
         if max_concurrent_browsers is None:
@@ -404,7 +406,8 @@ class CSVProcessor:
             normal_budget=normal_budget,
             challenge_budget=challenge_budget,
             dead_site_budget=dead_site_budget,
-            min_retry_threshold=min_retry_threshold
+            min_retry_threshold=min_retry_threshold,
+            fast_mode=fast
         )
         self.extractor = ContactExtractor()
         self.validator = EmailValidator(
@@ -513,6 +516,13 @@ class CSVProcessor:
             result['phones'] = scrape_result.get('phones', [])
             result['whatsapp'] = scrape_result.get('whatsapp', [])
             result['pages_scraped'] = len(scrape_result.get('pages_scraped', []))
+
+            # FAST MODE: Limit extraction to speed up processing
+            if self.fast_mode:
+                result['emails'] = result['emails'][:4]  # Max 4 emails
+                result['phones'] = result['phones'][:1]  # Max 1 phone
+                result['whatsapp'] = result['whatsapp'][:1]  # Max 1 WhatsApp
+                # Social media profiles are limited in web_scraper extraction
 
             self.logger.debug(f"Extracted from {url}: emails={len(result['emails'])}, phones={len(result['phones'])}, whatsapp={len(result['whatsapp'])}, pages={result['pages_scraped']}")
 

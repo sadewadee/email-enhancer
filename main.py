@@ -54,7 +54,8 @@ class EmailScraperValidator:
             normal_budget=self.config.get('normal_budget', 60),
             challenge_budget=self.config.get('challenge_budget', 120),
             dead_site_budget=self.config.get('dead_site_budget', 20),
-            min_retry_threshold=self.config.get('min_retry_threshold', 5)
+            min_retry_threshold=self.config.get('min_retry_threshold', 5),
+            fast=self.config.get('fast', False)
         )
         self.post_processor = PostProcessor()
 
@@ -587,7 +588,9 @@ def create_config_from_args(args) -> Dict[str, Any]:
         'normal_budget': getattr(args, 'normal_budget', 60),
         'challenge_budget': getattr(args, 'challenge_budget', 120),
         'dead_site_budget': getattr(args, 'dead_site_budget', 20),
-        'min_retry_threshold': getattr(args, 'min_retry_threshold', 5)
+        'min_retry_threshold': getattr(args, 'min_retry_threshold', 5),
+        # Fast mode: limit extraction for speed
+        'fast': getattr(args, 'fast', False)
     }
     return config
 
@@ -664,6 +667,8 @@ Examples:
         p.add_argument('--challenge-budget', type=int, default=180, help='Budget for Cloudflare/challenge sites in seconds (default: 180)')
         p.add_argument('--dead-site-budget', type=int, default=20, help='Budget for dead sites in seconds (default: 20)')
         p.add_argument('--min-retry-threshold', type=int, default=5, help='Minimum remaining budget to attempt retry in seconds (default: 5)')
+        # Fast mode: limit extraction to speed up scraping
+        p.add_argument('--fast', action='store_true', help='Fast mode: limit extraction (1 WA, 1 social profile per platform, 1 phone, 4 emails max per row)')
 
     args = parser.parse_args()
 
