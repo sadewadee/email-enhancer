@@ -88,7 +88,7 @@ class EmailScraperValidator:
             'max_contacts_per_type': 10,
             'output_format': 'long',
             'generate_report': False,
-            'deduplicate': True,
+            'deduplicate': False,
             'log_level': 'INFO',
             # Default light-load behavior
             'block_images': True,
@@ -556,7 +556,8 @@ def create_config_from_args(args) -> Dict[str, Any]:
     """Create configuration dictionary from command line arguments."""
     # Support positive flags to enable features, with minimal defaults
     generate_report = getattr(args, 'report', False) or (not args.no_report)
-    deduplicate = getattr(args, 'dedup', False) or (not args.no_dedup)
+    # Deduplicate only if explicitly enabled with --dedupe flag (default: False)
+    deduplicate = getattr(args, 'dedupe', False)
 
     # Guarantee batch_size > max_workers regardless of user input/default
     max_workers = args.workers
@@ -654,9 +655,8 @@ Examples:
         p.add_argument('--skip-on-challenge', action='store_true', help='Skip immediately when Cloudflare challenge is detected (no retries)')
         # Minimal defaults: skip report and dedup unless explicitly enabled
         p.add_argument('--report', action='store_true', help='Enable summary report output')
-        p.add_argument('--dedup', action='store_true', help='Enable deduplication output (redundant when default ON)')
+        p.add_argument('--dedupe', action='store_true', help='Enable deduplication of extracted contacts (default: disabled)')
         p.add_argument('--no-report', action='store_true', default=True, help='Skip generating summary report (default: skip)')
-        p.add_argument('--no-dedup', action='store_true', default=False, help='Skip deduplication (default: dedupe ON)')
         p.add_argument('--dedup-by', nargs='+', metavar='COLUMN', help='Columns to use for deduplication (e.g., --dedup-by name address). Default: smart detection (name+address if available, otherwise url)')
         p.add_argument('--log-level', choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'], default='INFO', help='Log level (default: INFO)')
         # Proxy configuration

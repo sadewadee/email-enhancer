@@ -289,9 +289,6 @@ class PostProcessor:
         Remove duplicate rows based on specified columns.
         Smart deduplication: Only removes rows when business name AND address are the same.
 
-        ⚠️ CURRENTLY DISABLED - This method was removing too much data
-        Now it just copies the input to output without deduplication.
-
         Args:
             input_file: Path to input CSV file
             output_file: Path to output CSV file
@@ -305,27 +302,6 @@ class PostProcessor:
             # IMPORTANT: Use dtype=str to preserve phone_number format (with '+' prefix)
             df = pd.read_csv(input_file, dtype=str)
             original_count = len(df)
-
-            # ⚠️ DEDUPLICATION DISABLED - Just copy all data without removing duplicates
-            self.logger.warning("⚠️  DEDUPLICATION DISABLED - Copying all data without removing duplicates")
-
-            # Save all data without deduplication
-            os.makedirs(os.path.dirname(output_file), exist_ok=True)
-            df.to_csv(output_file, index=False)
-
-            stats = {
-                'original_rows': original_count,
-                'deduplicated_rows': original_count,
-                'duplicates_removed': 0,
-                'dedup_columns': [],
-                'status': 'DISABLED - No deduplication performed'
-            }
-
-            self.logger.info(f"✅ Copied {original_count} rows without deduplication")
-            return stats
-
-            # === OLD DEDUPLICATION LOGIC (DISABLED) ===
-            # The code below is kept for reference but will never execute
 
             # Smart deduplication: Auto-detect columns
             if dedup_columns is None:
@@ -363,23 +339,23 @@ class PostProcessor:
                 df_dedup = df  # No dedup columns, keep all rows
 
             final_count = len(df_dedup)
-            
+
             # Save deduplicated file
             os.makedirs(os.path.dirname(output_file), exist_ok=True)
             df_dedup.to_csv(output_file, index=False)
-            
+
             stats = {
                 'original_rows': original_count,
                 'deduplicated_rows': final_count,
                 'duplicates_removed': original_count - final_count,
                 'dedup_columns': dedup_columns
             }
-            
+
             if stats['duplicates_removed'] > 0:
                 self.logger.info(f"🧹 Removed {stats['duplicates_removed']} duplicates")
             # Don't log if no duplicates removed
             return stats
-            
+
         except Exception as e:
             self.logger.error(f"Error deduplicating contacts: {str(e)}")
             raise
