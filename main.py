@@ -645,8 +645,11 @@ Examples:
         # Light-load is default; add override to disable
         p.add_argument('--light-load', action='store_true', help='[Default ON] Enable light-load: block images and apply allowlist routing (keeps Cloudflare-critical JS/CSS)')
         p.add_argument('--no-light-load', action='store_true', help='Disable light-load (load all resources; no allowlist routing)')
-        p.add_argument('--no-network-idle', action='store_true', help='Do not wait for network idle; useful for Cloudflare wait pages or long-polling sites')
+        # CHANGED: network_idle now defaults to FALSE (prevent indefinite waits)
+        p.add_argument('--network-idle', action='store_true', help='Wait for network idle state (slower, useful for some sites)')
         p.add_argument('--disable-resources', action='store_true', help='Disable non-essential resources (fonts, video, media) to save bandwidth')
+        # CHANGED: Added flag to optionally enable static fetch (now disabled by default)
+        p.add_argument('--enable-static-first', action='store_true', help='Try static HTTP fetch before browser (faster for simple sites, but slower fallback for dynamic sites)')
         # Cloudflare control
         p.add_argument('--cf-wait-timeout', type=int, default=60, help='Per-URL Cloudflare wait timeout in seconds (default: 60)')
         p.add_argument('--skip-on-challenge', action='store_true', help='Skip immediately when Cloudflare challenge is detected (no retries)')

@@ -463,6 +463,11 @@ class ContactExtractor:
 
         Only extracts the FIRST occurrence per platform to avoid duplicates.
 
+        Extraction methods (in order):
+        1. <a> tags with href attributes (standard websites)
+        2. <script> tags containing JSON data (Taplink, Linktree, etc.)
+        3. Text content (fallback)
+
         Args:
             html (str): HTML content as string
             base_url (str): Base URL for context
@@ -478,7 +483,7 @@ class ContactExtractor:
         # Track first occurrence per platform
         found_platforms = {}
 
-        # Extract from links
+        # METHOD 1: Extract from <a> tags (standard websites)
         if is_html and soup is not None:
             all_links = soup.find_all('a', href=True)
             for link in all_links:
@@ -521,7 +526,81 @@ class ContactExtractor:
                                 found_platforms[platform] = True
                                 break
 
-        # Extract from text content (backup method)
+        # METHOD 2: Extract from <script> JSON data (Taplink, Linktree, Beacons, etc.)
+        if is_html and soup is not None:
+            script_tags = soup.find_all('script')
+            for script in script_tags:
+                script_content = script.string or ""
+                if not script_content:
+                    continue
+
+                # Try to find JSON objects in script content
+                # Common patterns: window.data = {...}, window.__NEXT_DATA__ = {...}, var config = {...}
+                import json
+
+                # Pattern 1: window.data = {...}
+                if 'window.data' in script_content or 'window.__data' in script_content:
+                    try:
+                        # Extract JSON portion
+                        start_idx = script_content.find('{')
+                        if start_idx != -1:
+                            # Find matching closing brace
+                            brace_count = 0
+                            end_idx = start_idx
+                            for i in range(start_idx, len(script_content)):
+                                if script_content[i] == '{':
+                                    brace_count += 1
+                                elif script_content[i] == '}':
+                                    brace_count -= 1
+                                    if brace_count == 0:
+                                        end_idx = i + 1
+                                        break
+
+                            if end_idx > start_idx:
+                                json_str = script_content[start_idx:end_idx]
+                                try:
+                                    data = json.loads(json_str)
+                                    # Recursively search for social media URLs in JSON
+                                    self._extract_social_from_json(data, found_platforms, social_contacts, base_url)
+                                except json.JSONDecodeError:
+                                    pass
+                    except Exception:
+                        pass
+
+                # Pattern 2: Direct URL pattern matching in script content
+                for platform, patterns in self.social_patterns.items():
+                    if platform in found_platforms:
+                        continue
+
+                    for pattern in patterns:
+                        matches = pattern.findall(script_content)
+                        if matches:
+                            username = matches[0] if isinstance(matches[0], str) else ""
+                            if username and username.strip():
+                                if platform == 'facebook':
+                                    full_url = f"https://facebook.com/{username}"
+                                elif platform == 'instagram':
+                                    full_url = f"https://instagram.com/{username}"
+                                elif platform == 'tiktok':
+                                    username_clean = username.lstrip('@')
+                                    full_url = f"https://tiktok.com/@{username_clean}"
+                                elif platform == 'youtube':
+                                    full_url = f"https://youtube.com/{username}"
+                                else:
+                                    continue
+
+                                social_contacts.append({
+                                    'field': 'social_media',
+                                    'platform': platform,
+                                    'username': username,
+                                    'url': full_url,
+                                    'contact_source_page': '<script> JSON extraction',
+                                    'source_url': base_url
+                                })
+                                found_platforms[platform] = True
+                                break
+
+        # METHOD 3: Extract from text content (fallback)
         text_content = soup.get_text() if is_html and soup is not None else html_str
 
         for platform, patterns in self.social_patterns.items():
@@ -561,6 +640,63 @@ class ContactExtractor:
                             break
 
         return social_contacts
+
+    def _extract_social_from_json(self, obj, found_platforms: dict, social_contacts: list, base_url: str):
+        """
+        Recursively extract social media URLs from JSON object.
+
+        Args:
+            obj: JSON object (dict, list, or primitive)
+            found_platforms: Dict tracking which platforms have been found
+            social_contacts: List to append found contacts to
+            base_url: Base URL for context
+        """
+        if isinstance(obj, dict):
+            for key, value in obj.items():
+                # Check if key suggests social media
+                key_lower = str(key).lower()
+
+                # Direct platform key matches
+                for platform in ['facebook', 'instagram', 'tiktok', 'youtube']:
+                    if platform in found_platforms:
+                        continue
+
+                    if platform in key_lower and isinstance(value, str):
+                        # Extract username/URL from value
+                        for pattern in self.social_patterns.get(platform, []):
+                            match = pattern.search(value)
+                            if match:
+                                username = match.group(1) if match.lastindex else ""
+                                if username and username.strip():
+                                    if platform == 'facebook':
+                                        full_url = f"https://facebook.com/{username}"
+                                    elif platform == 'instagram':
+                                        full_url = f"https://instagram.com/{username}"
+                                    elif platform == 'tiktok':
+                                        username_clean = username.lstrip('@')
+                                        full_url = f"https://tiktok.com/@{username_clean}"
+                                    elif platform == 'youtube':
+                                        full_url = f"https://youtube.com/{username}"
+                                    else:
+                                        continue
+
+                                    social_contacts.append({
+                                        'field': 'social_media',
+                                        'platform': platform,
+                                        'username': username,
+                                        'url': full_url,
+                                        'contact_source_page': '<script> JSON extraction',
+                                        'source_url': base_url
+                                    })
+                                    found_platforms[platform] = True
+                                    break
+
+                # Recurse into nested structures
+                self._extract_social_from_json(value, found_platforms, social_contacts, base_url)
+
+        elif isinstance(obj, list):
+            for item in obj:
+                self._extract_social_from_json(item, found_platforms, social_contacts, base_url)
 
     def _normalize_email(self, email: str) -> Optional[str]:
         """Normalize email address and strip any trailing/leading non-email tokens.
@@ -862,6 +998,18 @@ class ContactExtractor:
             # Parse the phone number
             region = country_code if not cleaned.startswith('+') else None
             parsed_number = phonenumbers.parse(cleaned, region)
+        except phonenumbers.NumberParseException:
+            # If parsing failed and number doesn't start with +, try adding + prefix
+            # This handles WhatsApp numbers like "393518013001" (Italy) without explicit country code
+            if not cleaned.startswith('+') and country_code is None:
+                try:
+                    parsed_number = phonenumbers.parse('+' + cleaned, None)
+                except phonenumbers.NumberParseException:
+                    return None, None
+            else:
+                return None, None
+
+        try:
 
             # Validate the number
             if phonenumbers.is_valid_number(parsed_number):

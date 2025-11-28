@@ -11,6 +11,38 @@ import argparse
 import os
 import sys
 import re
+import chardet
+
+
+def detect_encoding(file_path: str) -> str:
+    """Detect file encoding using chardet with multiple fallbacks."""
+    encodings_to_try = ['utf-8', 'latin-1', 'cp1252', 'iso-8859-1', 'shift_jis', 'gb2312']
+
+    # Try chardet first
+    try:
+        with open(file_path, 'rb') as f:
+            raw_data = f.read(100000)
+            result = chardet.detect(raw_data)
+            encoding = result.get('encoding')
+            if encoding:
+                # Verify it works
+                with open(file_path, 'r', encoding=encoding) as test_f:
+                    test_f.read(1000)
+                return encoding
+    except Exception:
+        pass
+
+    # Try each encoding in order
+    for encoding in encodings_to_try:
+        try:
+            with open(file_path, 'r', encoding=encoding) as f:
+                f.read(10000)  # Try to read first 10KB
+            return encoding
+        except (UnicodeDecodeError, LookupError):
+            continue
+
+    # Last resort: use latin-1 (accepts all bytes)
+    return 'latin-1'
 
 
 def parse_size(size_str: str) -> int:
@@ -40,11 +72,17 @@ def get_output_filename(input_file: str, index: int) -> str:
     return f"{base}_{index}{ext}"
 
 
-def split_by_size(input_file: str, max_size: int) -> list[str]:
+def split_by_size(input_file: str, max_size: int, encoding: str = 'utf-8') -> list[str]:
     """Split CSV file by size, preserving header in each chunk."""
     output_files = []
 
-    with open(input_file, 'r', encoding='utf-8') as f:
+    try:
+        f = open(input_file, 'r', encoding=encoding)
+    except UnicodeDecodeError:
+        print(f"  Warning: Encoding '{encoding}' failed, trying latin-1")
+        f = open(input_file, 'r', encoding='latin-1')
+
+    with f:
         header = f.readline()
         header_size = len(header.encode('utf-8'))
 
@@ -81,12 +119,19 @@ def split_by_size(input_file: str, max_size: int) -> list[str]:
     return output_files
 
 
-def split_by_count(input_file: str, num_files: int) -> list[str]:
+def split_by_count(input_file: str, num_files: int, encoding: str = 'utf-8') -> list[str]:
     """Split CSV file into exactly N files."""
     output_files = []
 
     # Count total lines first
-    with open(input_file, 'r', encoding='utf-8') as f:
+    try:
+        f = open(input_file, 'r', encoding=encoding)
+    except UnicodeDecodeError:
+        print(f"  Warning: Encoding '{encoding}' failed, trying latin-1")
+        f = open(input_file, 'r', encoding='latin-1')
+        encoding = 'latin-1'
+
+    with f:
         header = f.readline()
         total_lines = sum(1 for _ in f)
 
@@ -98,7 +143,7 @@ def split_by_count(input_file: str, num_files: int) -> list[str]:
     base_lines = total_lines // num_files
     extra_lines = total_lines % num_files  # First N files get 1 extra line
 
-    with open(input_file, 'r', encoding='utf-8') as f:
+    with open(input_file, 'r', encoding=encoding) as f:
         header = f.readline()
 
         for file_index in range(1, num_files + 1):
@@ -124,11 +169,17 @@ def split_by_count(input_file: str, num_files: int) -> list[str]:
     return output_files
 
 
-def split_by_lines(input_file: str, max_lines: int) -> list[str]:
+def split_by_lines(input_file: str, max_lines: int, encoding: str = 'utf-8') -> list[str]:
     """Split CSV file by line count, preserving header in each chunk."""
     output_files = []
 
-    with open(input_file, 'r', encoding='utf-8') as f:
+    try:
+        f = open(input_file, 'r', encoding=encoding)
+    except UnicodeDecodeError:
+        print(f"  Warning: Encoding '{encoding}' failed, trying latin-1")
+        f = open(input_file, 'r', encoding='latin-1')
+
+    with f:
         header = f.readline()
 
         file_index = 1
@@ -202,12 +253,24 @@ Examples:
         print("Error: Cannot specify multiple split methods. Choose one: -s, -l, or -n")
         sys.exit(1)
 
-    # Get input file info
+    # Get input file info and detect encoding
     input_size = os.path.getsize(args.input)
-    with open(args.input, 'r', encoding='utf-8') as f:
-        total_lines = sum(1 for _ in f) - 1  # Exclude header
+    print(f"Detecting encoding for: {args.input}")
+    encoding = detect_encoding(args.input)
+
+    try:
+        with open(args.input, 'r', encoding=encoding) as f:
+            total_lines = sum(1 for _ in f) - 1  # Exclude header
+    except UnicodeDecodeError as e:
+        print(f"Error: Could not read file with encoding '{encoding}'")
+        print(f"Details: {e}")
+        print(f"Trying with latin-1 as fallback...")
+        encoding = 'latin-1'
+        with open(args.input, 'r', encoding=encoding) as f:
+            total_lines = sum(1 for _ in f) - 1
 
     print(f"\nInput: {args.input}")
+    print(f"Encoding: {encoding}")
     print(f"Size: {input_size:,} bytes ({input_size/1024/1024:.2f} MB)")
     print(f"Rows: {total_lines:,} (excluding header)\n")
 
@@ -215,13 +278,13 @@ Examples:
     if args.size:
         max_size = parse_size(args.size)
         print(f"Splitting by size: {max_size:,} bytes ({max_size/1024/1024:.2f} MB) per file\n")
-        output_files = split_by_size(args.input, max_size)
+        output_files = split_by_size(args.input, max_size, encoding)
     elif args.lines:
         print(f"Splitting by lines: {args.lines:,} lines per file\n")
-        output_files = split_by_lines(args.input, args.lines)
+        output_files = split_by_lines(args.input, args.lines, encoding)
     else:
         print(f"Splitting into {args.num} files\n")
-        output_files = split_by_count(args.input, args.num)
+        output_files = split_by_count(args.input, args.num, encoding)
 
     print(f"\nDone! Created {len(output_files)} files.")
 
