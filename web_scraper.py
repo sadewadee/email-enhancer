@@ -845,12 +845,12 @@ class WebScraper:
                  block_images: bool = False,
                  disable_resources: bool = False,
                  static_first: bool = False,  # CHANGED: Default to FALSE (disable static fetch, sites mostly need JS rendering)
-                 cf_wait_timeout: int = 60,
+                 cf_wait_timeout: int = 90,
                  skip_on_challenge: bool = False,
                  proxy_file: str = "proxy.txt",
                  max_concurrent_browsers: int = 3,
-                 normal_budget: int = 60,
-                 challenge_budget: int = 120,
+                 normal_budget: int = 90,
+                 challenge_budget: int = 180,
                  dead_site_budget: int = 20,
                  min_retry_threshold: int = 5):
         """

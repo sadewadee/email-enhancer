@@ -637,7 +637,7 @@ Examples:
     # Common arguments
     for p in [single_parser, batch_parser, url_parser]:
         p.add_argument('--workers', type=int, default=3, help='Number of worker threads (default: 3)')
-        p.add_argument('--timeout', type=int, default=120, help='Request timeout in seconds (default: 120)')
+        p.add_argument('--timeout', type=int, default=150, help='Request timeout in seconds (default: 150)')
         p.add_argument('--batch-size', type=int, default=100, help='Batch size for processing (default: 100; auto-adjusted to be > workers)')
         p.add_argument('--chunk-size', type=int, default=0, help='Chunked CSV read size (rows per chunk). 0 disables chunking (default).')
         p.add_argument('--max-contacts', type=int, default=10, help='Max contacts per type in wide format (default: 10)')
@@ -645,13 +645,9 @@ Examples:
         # Light-load is default; add override to disable
         p.add_argument('--light-load', action='store_true', help='[Default ON] Enable light-load: block images and apply allowlist routing (keeps Cloudflare-critical JS/CSS)')
         p.add_argument('--no-light-load', action='store_true', help='Disable light-load (load all resources; no allowlist routing)')
-        # CHANGED: network_idle now defaults to FALSE (prevent indefinite waits)
-        p.add_argument('--network-idle', action='store_true', help='Wait for network idle state (slower, useful for some sites)')
         p.add_argument('--disable-resources', action='store_true', help='Disable non-essential resources (fonts, video, media) to save bandwidth')
-        # CHANGED: Added flag to optionally enable static fetch (now disabled by default)
-        p.add_argument('--enable-static-first', action='store_true', help='Try static HTTP fetch before browser (faster for simple sites, but slower fallback for dynamic sites)')
         # Cloudflare control
-        p.add_argument('--cf-wait-timeout', type=int, default=60, help='Per-URL Cloudflare wait timeout in seconds (default: 60)')
+        p.add_argument('--cf-wait-timeout', type=int, default=90, help='Per-URL Cloudflare wait timeout in seconds (default: 90)')
         p.add_argument('--skip-on-challenge', action='store_true', help='Skip immediately when Cloudflare challenge is detected (no retries)')
         # Minimal defaults: skip report and dedup unless explicitly enabled
         p.add_argument('--report', action='store_true', help='Enable summary report output')
@@ -664,8 +660,8 @@ Examples:
         p.add_argument('--proxy-file', default='proxy.txt', help='Path to proxy file for automatic proxy detection (default: proxy.txt)')
 
         # Budget configuration for time-based retry management
-        p.add_argument('--normal-budget', type=int, default=60, help='Budget for normal sites in seconds (default: 60)')
-        p.add_argument('--challenge-budget', type=int, default=120, help='Budget for Cloudflare/challenge sites in seconds (default: 120)')
+        p.add_argument('--normal-budget', type=int, default=90, help='Budget for normal sites in seconds (default: 90)')
+        p.add_argument('--challenge-budget', type=int, default=180, help='Budget for Cloudflare/challenge sites in seconds (default: 180)')
         p.add_argument('--dead-site-budget', type=int, default=20, help='Budget for dead sites in seconds (default: 20)')
         p.add_argument('--min-retry-threshold', type=int, default=5, help='Minimum remaining budget to attempt retry in seconds (default: 5)')
 
