@@ -21,6 +21,15 @@ import threading
 import chardet  # FIX: For proper encoding detection of non-Latin content
 
 
+def get_best_parser() -> str:
+    """Get the best available HTML parser (lxml > html.parser)."""
+    try:
+        import lxml
+        return 'lxml'
+    except ImportError:
+        return 'html.parser'
+
+
 # ============================================================================
 # ENCODING UTILITIES FOR NON-LATIN CHARACTER SUPPORT (CJK, Arabic, etc.)
 # ============================================================================
@@ -882,6 +891,7 @@ class WebScraper:
         self.disable_resources = disable_resources
         self.static_first = static_first
         self.fast_mode = fast_mode  # Fast mode: limit extraction for speed
+        self.parser = get_best_parser()  # Use lxml (3-5x faster) or fallback to html.parser
         # Per-URL maximum wait for Cloudflare wait page before skipping
         self.cf_wait_timeout = cf_wait_timeout
         # If True, skip early when a Cloudflare challenge is detected
@@ -1363,7 +1373,7 @@ class WebScraper:
             }
 
             if html:
-                soup = BeautifulSoup(html, 'html.parser')
+                soup = BeautifulSoup(html, self.parser)
                 title_tag = soup.find('title')
                 if title_tag:
                     result['page_title'] = title_tag.get_text().strip()
@@ -2571,7 +2581,7 @@ class WebScraper:
         if not html:
             return structured_data
 
-        soup = BeautifulSoup(html, 'html.parser')
+        soup = BeautifulSoup(html, self.parser)
         # Use ContactExtractor for robust email matching in targeted fields
         try:
             from contact_extractor import ContactExtractor
@@ -2923,7 +2933,7 @@ class WebScraper:
                 return True
 
         # Check page content
-        soup = BeautifulSoup(html, 'html.parser')
+        soup = BeautifulSoup(html, self.parser)
 
         # Check title
         title = soup.find('title')

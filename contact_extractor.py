@@ -10,10 +10,22 @@ from typing import Set, List, Dict, Tuple, Optional
 from urllib.parse import urljoin, urlparse, unquote
 
 
+def get_best_parser() -> str:
+    """Get the best available HTML parser (lxml > html.parser)."""
+    try:
+        import lxml
+        return 'lxml'
+    except ImportError:
+        return 'html.parser'
+
+
 class ContactExtractor:
     """Extract and normalize contact information from HTML content."""
 
     def __init__(self):
+        # Use best available parser (lxml is 3-5x faster than html.parser)
+        self.parser = get_best_parser()
+
         # Email regex pattern with stricter validation:
         # - Local part must start with letter (not number)
         # - Domain must be valid (not file extensions)
@@ -128,7 +140,7 @@ class ContactExtractor:
         emails = []
         html_str = html or ""
         is_html = self._is_html_like(html_str)
-        soup = BeautifulSoup(html_str, 'html.parser') if is_html else None
+        soup = BeautifulSoup(html_str, self.parser) if is_html else None
 
         # Extract from mailto links
         if is_html and soup is not None:
@@ -311,7 +323,7 @@ class ContactExtractor:
         phones = []
         html_str = html or ""
         is_html = self._is_html_like(html_str)
-        soup = BeautifulSoup(html_str, 'html.parser') if is_html else None
+        soup = BeautifulSoup(html_str, self.parser) if is_html else None
 
         # Extract from tel links
         if is_html and soup is not None:
@@ -402,7 +414,7 @@ class ContactExtractor:
         whatsapp_contacts = []
         html_str = html or ""
         is_html = self._is_html_like(html_str)
-        soup = BeautifulSoup(html_str, 'html.parser') if is_html else None
+        soup = BeautifulSoup(html_str, self.parser) if is_html else None
 
         # Extract from links
         if is_html and soup is not None:
@@ -478,7 +490,7 @@ class ContactExtractor:
         social_contacts = []
         html_str = html or ""
         is_html = self._is_html_like(html_str)
-        soup = BeautifulSoup(html_str, 'html.parser') if is_html else None
+        soup = BeautifulSoup(html_str, self.parser) if is_html else None
 
         # Track first occurrence per platform
         found_platforms = {}
