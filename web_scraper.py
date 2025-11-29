@@ -2141,8 +2141,12 @@ class WebScraper:
                 contacts = extractor.extract_all_contacts(str(section), main_result['final_url'])
                 for contact in contacts:
                     field = contact.get('field')
+                    if field == 'social_media':
+                        self.logger.debug(f"[HEADER] Found social_media: platform={contact.get('platform')}, url={contact.get('url')}")
                     value = contact.get('value_normalized') or contact.get('value_raw') or contact.get('url')
                     if not value:
+                        if field == 'social_media':
+                            self.logger.debug(f"[HEADER] Skipped (no value): {contact.get('platform')}")
                         continue
                     if field == 'email':
                         result['emails'].append(value)
@@ -2154,6 +2158,7 @@ class WebScraper:
                         platform = contact.get('platform')
                         # Only set if not already set (first occurrence only)
                         if platform in ['facebook', 'instagram', 'tiktok', 'youtube'] and not result.get(platform):
+                            self.logger.debug(f"[HEADER] ✅ Setting {platform} = {value}")
                             result[platform] = value
 
             # 2) Footer scan
@@ -2202,6 +2207,16 @@ class WebScraper:
                     # Only set if not already set (first occurrence only)
                     if platform in ['facebook', 'instagram', 'tiktok', 'youtube'] and not result.get(platform):
                         result[platform] = value
+
+            # 5) Dedicated social media extraction from FULL HTML
+            # This ensures we catch social media links even if section-based extraction missed them
+            social_media_contacts = extractor.extract_social_media(main_result['html'], main_result['final_url'])
+            for social_contact in social_media_contacts:
+                platform = social_contact.get('platform')
+                url = social_contact.get('url')
+                if platform and url and platform in ['facebook', 'instagram', 'tiktok', 'youtube'] and not result.get(platform):
+                    self.logger.debug(f"[FULL_PAGE_SOCIAL] Setting {platform} = {url}")
+                    result[platform] = str(url)
             result['pages_scraped'].append({
                 'url': main_result['final_url'],
                 'title': main_result.get('page_title', ''),
@@ -2284,7 +2299,10 @@ class WebScraper:
                             platform = contact.get('platform')
                             # Only set if not already set (first occurrence only)
                             if platform in ['facebook', 'instagram', 'tiktok', 'youtube'] and not result.get(platform):
+                                self.logger.debug(f"[SOCIAL_MEDIA_DEBUG] Setting {platform} = {value} for URL: {url}")
                                 result[platform] = value
+                            else:
+                                self.logger.debug(f"[SOCIAL_MEDIA_DEBUG] Skipped {platform} (already set or invalid platform) for URL: {url}")
                     result['pages_scraped'].append({
                         'url': contact_result['final_url'],
                         'title': contact_result.get('page_title', ''),

@@ -516,6 +516,11 @@ class CSVProcessor:
             result['phones'] = scrape_result.get('phones', [])
             result['whatsapp'] = scrape_result.get('whatsapp', [])
             result['pages_scraped'] = len(scrape_result.get('pages_scraped', []))
+            # Propagate social media profiles to result for CSV writer
+            result['facebook'] = scrape_result.get('facebook', '')
+            result['instagram'] = scrape_result.get('instagram', '')
+            result['tiktok'] = scrape_result.get('tiktok', '')
+            result['youtube'] = scrape_result.get('youtube', '')
 
             # FAST MODE: Limit extraction to speed up processing
             if self.fast_mode:

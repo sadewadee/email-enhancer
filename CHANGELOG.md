@@ -1,3 +1,14 @@
+##### [0.1.6] - 2025-11-29
+
+        - Fixed
+            - **Social Media CSV Propagation**: Social media fields now correctly propagate from scraper to CSV output
+                - Issue: Social media extraction was working (facebook/instagram/tiktok/youtube detected by scraper)
+                - Root cause: `process_single_url()` only copied emails/phones/whatsapp to result dict, not social media fields
+                - Fix: Added propagation of facebook/instagram/tiktok/youtube from scrape_result to result (csv_processor.py:519-523)
+                - Impact: CSV columns for social media now populated when scraper finds them (previously always empty)
+                - No breaking changes: Headers already existed, only data flow fixed
+                - Files modified: csv_processor.py (+4 lines)
+
 ##### [0.1.5] - 2025-11-26
 
         - Added
