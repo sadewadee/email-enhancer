@@ -365,7 +365,7 @@ class CSVProcessor:
     Handles parallel processing of CSV files containing URLs for contact extraction.
     """
 
-    def __init__(self, max_workers: int = 5, timeout: int = 30, block_images: bool = False, disable_resources: bool = False, network_idle: bool = True, cf_wait_timeout: int = 60, skip_on_challenge: bool = False, proxy_file: str = "proxy.txt", max_concurrent_browsers: int = None, normal_budget: int = 60, challenge_budget: int = 120, dead_site_budget: int = 20, min_retry_threshold: int = 5, fast: bool = False):
+    def __init__(self, max_workers: int = 5, timeout: int = 30, block_images: bool = False, disable_resources: bool = False, network_idle: bool = True, cf_wait_timeout: int = 60, skip_on_challenge: bool = False, proxy_file: str = "proxy.txt", max_concurrent_browsers: int = None, normal_budget: int = 60, challenge_budget: int = 120, dead_site_budget: int = 20, min_retry_threshold: int = 5, fast: bool = False, db_writer=None):
         """
         Initialize CSV processor.
 
@@ -384,10 +384,12 @@ class CSVProcessor:
             dead_site_budget: Budget for dead sites in seconds (default: 20)
             min_retry_threshold: Minimum remaining budget to attempt retry in seconds (default: 5)
             fast: Fast mode - limit extraction (1 WA, 1 social profile, 1 phone, 4 emails max)
+            db_writer: Optional DatabaseWriter instance for PostgreSQL export
         """
         self.max_workers = max_workers
         self.timeout = timeout
         self.fast_mode = fast
+        self.db_writer = db_writer  # Store db_writer for consumer loop
 
         # Auto-set max_concurrent_browsers to match max_workers if not specified
         if max_concurrent_browsers is None:
@@ -812,6 +814,27 @@ class CSVProcessor:
                                     self.logger.debug(f"WhatsApp validation failed for {url}: {str(e)}")
                                     validated_whatsapp = {}
                             result['validated_whatsapp'] = validated_whatsapp
+
+                            # ============================================================================
+                            # DATABASE EXPORT (if enabled)
+                            # ============================================================================
+                            # Write to PostgreSQL database if --export-db flag is set
+                            # This happens BEFORE CSV export to ensure database is enriched first
+                            if self.db_writer is not None:
+                                try:
+                                    import time
+                                    db_start = time.time()
+                                    db_success = self.db_writer.upsert_contact(result)
+                                    db_elapsed = time.time() - db_start
+
+                                    if db_success:
+                                        self.logger.debug(f"DB: UPSERT successful for {url} ({db_elapsed:.3f}s)")
+                                    else:
+                                        self.logger.warning(f"DB: UPSERT failed for {url} after retries")
+
+                                except Exception as db_err:
+                                    self.logger.error(f"DB: Unexpected error for {url}: {db_err}", exc_info=True)
+                                    # Continue with CSV export regardless of DB error
 
                             emails_count = len(emails_list)
                             phones_count = len(result.get('phones', []) or [])

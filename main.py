@@ -40,6 +40,52 @@ class EmailScraperValidator:
         # Setup logging
         self._setup_logging()
 
+        # Initialize database writer if --export-db flag is set
+        self.db_writer = None
+        if self.config.get('export_db', False):
+            try:
+                from database_writer import create_database_writer
+
+                # Use root logger
+                logger = logging.getLogger()
+
+                logger.info("Initializing PostgreSQL database writer...")
+                self.db_writer = create_database_writer(logger)
+
+                if self.db_writer is None:
+                    logger.error("FATAL: Failed to create database writer")
+                    logger.error("Check your .env file and ensure python-dotenv is installed")
+                    import sys
+                    sys.exit(1)
+
+                # Test connection (FAIL FAST)
+                if not self.db_writer.connect():
+                    logger.error("FATAL: Failed to connect to PostgreSQL database")
+                    logger.error("Check your .env file and database server status")
+                    import sys
+                    sys.exit(1)
+
+                # Verify schema
+                if not self.db_writer.verify_schema():
+                    logger.error("FATAL: Database schema does not match expected structure")
+                    logger.error("Run schema_migration.sql to add missing columns")
+                    import sys
+                    sys.exit(1)
+
+                logger.info("✓ Database connection established successfully")
+
+            except ImportError as e:
+                logger = logging.getLogger()
+                logger.error(f"FATAL: Failed to import database_writer: {e}")
+                logger.error("Ensure database_writer.py is in the same directory as main.py")
+                import sys
+                sys.exit(1)
+            except Exception as e:
+                logger = logging.getLogger()
+                logger.error(f"FATAL: Unexpected error during database initialization: {e}", exc_info=True)
+                import sys
+                sys.exit(1)
+
         # Initialize components
         self.csv_processor = CSVProcessor(
             max_workers=self.config['max_workers'],
@@ -55,7 +101,8 @@ class EmailScraperValidator:
             challenge_budget=self.config.get('challenge_budget', 120),
             dead_site_budget=self.config.get('dead_site_budget', 20),
             min_retry_threshold=self.config.get('min_retry_threshold', 5),
-            fast=self.config.get('fast', False)
+            fast=self.config.get('fast', False),
+            db_writer=self.db_writer  # Pass db_writer to CSV processor
         )
         self.post_processor = PostProcessor()
 
@@ -413,6 +460,228 @@ class EmailScraperValidator:
                 'error': str(e)
             }
 
+    def process_dsn_mode(self) -> Dict[str, Any]:
+        """
+        Process data from result table (DSN mode) for multi-server enrichment.
+        
+        Reads pending rows from result table using advisory locks to prevent
+        race conditions across multiple concurrent servers.
+        Writes to zen_contacts table.
+        
+        Returns:
+            Dictionary with processing statistics
+        """
+        import socket
+        import time
+        from tqdm import tqdm
+        
+        # Get server ID (auto-generate from hostname if not provided)
+        server_id = self.config.get('server_id')
+        if not server_id:
+            server_id = socket.gethostname()[:20]
+        
+        batch_size = self.config.get('batch_size_dsn', 100)
+        limit_dsn = self.config.get('limit_dsn', None)
+        
+        self.logger.info(f"[{server_id}] Starting DSN mode - reading from results table")
+        self.logger.info(f"[{server_id}] Batch size: {batch_size}" + (f", Limit: {limit_dsn}" if limit_dsn else ""))
+        
+        # Initialize DB source reader (V2 - uses zen_contacts)
+        try:
+            from db_source_reader_v2 import create_db_source_reader_v2
+            source_reader = create_db_source_reader_v2(server_id, logging.getLogger())
+            
+            if source_reader is None:
+                self.logger.error(f"[{server_id}] Failed to create DB source reader")
+                return {'status': 'failed', 'error': 'DB source reader creation failed'}
+            
+            if not source_reader.connect():
+                self.logger.error(f"[{server_id}] Failed to connect to database")
+                return {'status': 'failed', 'error': 'Database connection failed'}
+        except ImportError as e:
+            self.logger.error(f"[{server_id}] Failed to import db_source_reader_v2: {e}")
+            return {'status': 'failed', 'error': str(e)}
+        
+        # Initialize DB writer for output (V2 - writes to zen_contacts)
+        try:
+            from database_writer_v2 import create_database_writer_v2
+            db_writer = create_database_writer_v2(logging.getLogger())
+            
+            if db_writer is None:
+                self.logger.error(f"[{server_id}] Failed to create database writer")
+                source_reader.close()
+                return {'status': 'failed', 'error': 'DB writer creation failed'}
+            
+            if not db_writer.connect():
+                self.logger.error(f"[{server_id}] Failed to connect to output database")
+                source_reader.close()
+                return {'status': 'failed', 'error': 'Output database connection failed'}
+            
+            if not db_writer.verify_schema():
+                self.logger.error(f"[{server_id}] Database schema validation failed")
+                self.logger.error(f"[{server_id}] Run: migrations/schema_v3_complete.sql")
+                source_reader.close()
+                return {'status': 'failed', 'error': 'Schema validation failed - run migrations/schema_v3_complete.sql'}
+        except ImportError as e:
+            self.logger.error(f"[{server_id}] Failed to import database_writer_v2: {e}")
+            source_reader.close()
+            return {'status': 'failed', 'error': str(e)}
+        
+        # Get initial counts
+        pending_count = source_reader.get_pending_count()
+        total_count = source_reader.get_total_count()
+        completed_count = source_reader.get_completed_count()
+        
+        self.logger.info(f"[{server_id}] Status: Pending={pending_count:,} | Completed={completed_count:,} | Total={total_count:,}")
+        
+        if pending_count == 0:
+            self.logger.info(f"[{server_id}] No pending rows. Exiting.")
+            source_reader.close()
+            db_writer.close()
+            return {'status': 'completed', 'processed': 0, 'message': 'No pending rows'}
+        
+        # Apply limit if specified
+        target_count = min(pending_count, limit_dsn) if limit_dsn else pending_count
+        
+        # Processing stats
+        stats = {
+            'total_processed': 0,
+            'successful': 0,
+            'failed': 0,
+            'total_emails': 0,
+            'total_phones': 0,
+            'total_whatsapp': 0,
+            'start_time': time.time(),
+        }
+        
+        # Create progress bar with limit-aware total
+        pbar = tqdm(total=target_count, desc=f"[{server_id}] Enriching", unit="url")
+        
+        try:
+            while True:
+                # Check if we've reached the limit
+                if limit_dsn and stats['total_processed'] >= limit_dsn:
+                    self.logger.info(f"[{server_id}] Reached limit of {limit_dsn} rows")
+                    break
+                
+                # Calculate remaining rows to claim
+                remaining = (limit_dsn - stats['total_processed']) if limit_dsn else batch_size
+                claim_size = min(batch_size, remaining) if limit_dsn else batch_size
+                
+                # Claim batch of rows
+                batch = source_reader.claim_batch(claim_size)
+                
+                if not batch:
+                    self.logger.info(f"[{server_id}] No more pending rows to claim")
+                    break
+                
+                # Process each row in batch
+                results = []
+                for row in batch:
+                    try:
+                        url = row.get('url', '')
+                        link = row.get('link', '')
+                        
+                        if not url:
+                            self.logger.debug(f"[{server_id}] Row {row.get('result_id')} has no URL, skipping")
+                            continue
+                        
+                        # Use existing scraper to process URL
+                        scrape_result = self.csv_processor.process_single_url(row)
+                        
+                        # Prepare result for database (use 'link' as UPSERT key)
+                        # Include original data from results table for proper field mapping
+                        result = {
+                            # UPSERT key and source tracking
+                            'link': link,  # Google Maps link as UPSERT key
+                            'result_id': row.get('result_id'),  # For source_id column
+                            
+                            # Original data from results table
+                            'name': row.get('name', ''),
+                            'category': row.get('category', ''),  # For business_category
+                            'country': row.get('country', ''),  # For country_code
+                            'original_data': row.get('original_data', {}),  # Full GMaps data
+                            
+                            # Scraped data (extracted from website)
+                            'emails': '; '.join(scrape_result.get('emails', [])),
+                            'phones': '; '.join(scrape_result.get('phones', [])),
+                            'whatsapp': '; '.join(scrape_result.get('whatsapp', [])),
+                            'facebook': scrape_result.get('facebook', ''),
+                            'instagram': scrape_result.get('instagram', ''),
+                            'linkedin': scrape_result.get('linkedin', ''),
+                            'tiktok': scrape_result.get('tiktok', ''),
+                            'youtube': scrape_result.get('youtube', ''),
+                            
+                            # Scraping metadata
+                            'final_url': scrape_result.get('final_url', url),
+                            'was_redirected': scrape_result.get('was_redirected', False),
+                            'status': scrape_result.get('status', 'unknown'),
+                            'error': scrape_result.get('error', ''),
+                            'processing_time': scrape_result.get('processing_time', 0),
+                            'pages_scraped': scrape_result.get('pages_scraped', 0),
+                        }
+                        results.append(result)
+                        
+                        # Update stats
+                        stats['total_processed'] += 1
+                        if scrape_result.get('status') == 'success':
+                            stats['successful'] += 1
+                        else:
+                            stats['failed'] += 1
+                        stats['total_emails'] += len(scrape_result.get('emails', []))
+                        stats['total_phones'] += len(scrape_result.get('phones', []))
+                        stats['total_whatsapp'] += len(scrape_result.get('whatsapp', []))
+                        
+                    except Exception as e:
+                        self.logger.warning(f"[{server_id}] Error processing row {row.get('result_id')}: {e}")
+                        stats['failed'] += 1
+                
+                # Batch write to database
+                if results:
+                    written = db_writer.upsert_batch(results)
+                    self.logger.debug(f"[{server_id}] Wrote {written} rows to database")
+                
+                # Release locks for processed batch
+                result_ids = [r.get('result_id') for r in batch if r.get('result_id')]
+                source_reader.release_locks(result_ids)
+                
+                # Update progress bar
+                pbar.update(len(batch))
+                
+                # Log progress every 10 batches
+                if stats['total_processed'] % (batch_size * 10) == 0:
+                    elapsed = time.time() - stats['start_time']
+                    rate = stats['total_processed'] / (elapsed / 60) if elapsed > 0 else 0
+                    self.logger.info(
+                        f"[{server_id}] Progress: {stats['total_processed']:,} processed | "
+                        f"Rate: {rate:.1f}/min | Emails: {stats['total_emails']:,}"
+                    )
+        
+        except KeyboardInterrupt:
+            self.logger.warning(f"[{server_id}] Interrupted by user")
+        
+        finally:
+            pbar.close()
+            source_reader.close()
+            db_writer.close()
+        
+        # Calculate final stats
+        elapsed = time.time() - stats['start_time']
+        stats['duration_seconds'] = elapsed
+        stats['rate_per_minute'] = stats['total_processed'] / (elapsed / 60) if elapsed > 0 else 0
+        stats['success_rate'] = (stats['successful'] / stats['total_processed'] * 100) if stats['total_processed'] > 0 else 0
+        
+        self.logger.info(f"[{server_id}] === DSN Mode Completed ===")
+        self.logger.info(f"[{server_id}] Processed: {stats['total_processed']:,} | Success: {stats['successful']:,} | Failed: {stats['failed']:,}")
+        self.logger.info(f"[{server_id}] Rate: {stats['rate_per_minute']:.1f}/min | Duration: {elapsed/60:.1f} min")
+        self.logger.info(f"[{server_id}] Emails: {stats['total_emails']:,} | Phones: {stats['total_phones']:,} | WhatsApp: {stats['total_whatsapp']:,}")
+        
+        return {
+            'status': 'completed',
+            'server_id': server_id,
+            'processing_stats': stats,
+        }
+
     def _post_process_results(self,
                             processed_file: str,
                             output_dir: str,
@@ -591,7 +860,14 @@ def create_config_from_args(args) -> Dict[str, Any]:
         'dead_site_budget': getattr(args, 'dead_site_budget', 20),
         'min_retry_threshold': getattr(args, 'min_retry_threshold', 5),
         # Fast mode: limit extraction for speed
-        'fast': getattr(args, 'fast', False)
+        'fast': getattr(args, 'fast', False),
+        # Database export: enable PostgreSQL export
+        'export_db': getattr(args, 'export_db', False),
+        # DSN mode: read from result table
+        'dsn': getattr(args, 'dsn', False),
+        'server_id': getattr(args, 'server_id', None),
+        'batch_size_dsn': getattr(args, 'batch_size_dsn', 100),
+        'limit_dsn': getattr(args, 'limit_dsn', None),
     }
     return config
 
@@ -622,7 +898,7 @@ Examples:
 
     # Single CSV processing
     single_parser = subparsers.add_parser('single', help='Process single CSV file')
-    single_parser.add_argument('input_file', help='Input CSV file path')
+    single_parser.add_argument('input_file', nargs='?', default=None, help='Input CSV file path (not required if using --dsn)')
     single_parser.add_argument('--output-dir', help='Output directory (default: same as input)')
     single_parser.add_argument('--limit', type=int, metavar='N', help='Limit processing to first N rows (for testing). Example: --limit 10')
 
@@ -667,6 +943,14 @@ Examples:
         p.add_argument('--challenge-budget', type=int, default=180, help='Budget for Cloudflare/challenge sites in seconds (default: 180)')
         p.add_argument('--dead-site-budget', type=int, default=20, help='Budget for dead sites in seconds (default: 20)')
         p.add_argument('--min-retry-threshold', type=int, default=5, help='Minimum remaining budget to attempt retry in seconds (default: 5)')
+
+        # Database export configuration
+        p.add_argument('--export-db', action='store_true', help='Enable parallel export to PostgreSQL database (requires .env config)')
+        # DSN mode: read from result table instead of CSV
+        p.add_argument('--dsn', action='store_true', help='Read from result table and write to zen_contacts (multi-server mode)')
+        p.add_argument('--server-id', type=str, default=None, help='Unique server identifier for --dsn mode (e.g., sg-01). Auto-generated from hostname if not provided.')
+        p.add_argument('--batch-size-dsn', type=int, default=100, help='Batch size for --dsn mode (default: 100)')
+        p.add_argument('--limit-dsn', type=int, default=None, help='Limit total rows to process in --dsn mode (for testing)')
         # Fast mode: limit extraction to speed up scraping
         p.add_argument('--fast', action='store_true', help='Fast mode: limit extraction (1 WA, 1 social profile per platform, 1 phone, 4 emails max per row)')
 
@@ -685,38 +969,76 @@ Examples:
 
         # Execute command
         if args.command == 'single':
-            result = scraper.process_single_csv(
-                input_file=args.input_file,
-                output_dir=args.output_dir,
-                limit_rows=getattr(args, 'limit', None)
-            )
-
-            if result['status'] == 'completed':
-                stats = result['processing_stats']
-                print(f"Processing completed successfully!")
-                print(f"Rate : {stats['success_rate']:.1f}% | {stats.get('processing_per_menit', 0):.2f} URL/min")
-                print(f"Email : {stats['total_emails']} | Valid Email : {stats['total_validated_emails']} | Phone : {stats['total_phones']} | WA : {stats['total_whatsapp']}")
-                if 'final_output_file' in result['post_processing']:
-                    print(f"Result file: {result['post_processing']['final_output_file']}")
-
-                # Format and display completion time
-                if 'total_duration_seconds' in stats:
-                    duration = int(stats['total_duration_seconds'])
+            # Check for DSN mode (read from result table)
+            if getattr(args, 'dsn', False):
+                # DSN mode doesn't need input_file
+                pass
+            elif not args.input_file:
+                print("Error: input_file is required unless using --dsn mode")
+                print("Usage: python main.py single <input_file.csv> [options]")
+                print("   or: python main.py single --dsn [--server-id <id>] [options]")
+                sys.exit(1)
+            
+            if getattr(args, 'dsn', False):
+                result = scraper.process_dsn_mode()
+                
+                if result['status'] == 'completed':
+                    stats = result.get('processing_stats', {})
+                    server_id = result.get('server_id', 'unknown')
+                    print(f"[{server_id}] DSN mode completed successfully!")
+                    print(f"[{server_id}] Processed: {stats.get('total_processed', 0):,} | Success rate: {stats.get('success_rate', 0):.1f}%")
+                    print(f"[{server_id}] Rate: {stats.get('rate_per_minute', 0):.1f}/min")
+                    print(f"[{server_id}] Emails: {stats.get('total_emails', 0):,} | Phones: {stats.get('total_phones', 0):,} | WA: {stats.get('total_whatsapp', 0):,}")
+                    
+                    # Format duration
+                    duration = int(stats.get('duration_seconds', 0))
                     hours = duration // 3600
                     minutes = (duration % 3600) // 60
                     seconds = duration % 60
-
                     if hours > 0:
                         time_str = f"{hours}h {minutes}m"
                     elif minutes > 0:
                         time_str = f"{minutes}m {seconds}s"
                     else:
                         time_str = f"{seconds}s"
-
-                    print(f"Completetion time : {time_str}")
+                    print(f"[{server_id}] Duration: {time_str}")
+                else:
+                    print(f"DSN mode failed: {result.get('error', 'Unknown error')}")
+                    sys.exit(1)
             else:
-                print(f"Processing failed: {result.get('error', 'Unknown error')}")
-                sys.exit(1)
+                # Normal CSV mode
+                result = scraper.process_single_csv(
+                    input_file=args.input_file,
+                    output_dir=args.output_dir,
+                    limit_rows=getattr(args, 'limit', None)
+                )
+
+                if result['status'] == 'completed':
+                    stats = result['processing_stats']
+                    print(f"Processing completed successfully!")
+                    print(f"Rate : {stats['success_rate']:.1f}% | {stats.get('processing_per_menit', 0):.2f} URL/min")
+                    print(f"Email : {stats['total_emails']} | Valid Email : {stats['total_validated_emails']} | Phone : {stats['total_phones']} | WA : {stats['total_whatsapp']}")
+                    if 'final_output_file' in result['post_processing']:
+                        print(f"Result file: {result['post_processing']['final_output_file']}")
+
+                    # Format and display completion time
+                    if 'total_duration_seconds' in stats:
+                        duration = int(stats['total_duration_seconds'])
+                        hours = duration // 3600
+                        minutes = (duration % 3600) // 60
+                        seconds = duration % 60
+
+                        if hours > 0:
+                            time_str = f"{hours}h {minutes}m"
+                        elif minutes > 0:
+                            time_str = f"{minutes}m {seconds}s"
+                        else:
+                            time_str = f"{seconds}s"
+
+                        print(f"Completetion time : {time_str}")
+                else:
+                    print(f"Processing failed: {result.get('error', 'Unknown error')}")
+                    sys.exit(1)
 
         elif args.command == 'batch':
             result = scraper.process_multiple_csv(

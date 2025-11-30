@@ -1,3 +1,48 @@
+##### [0.1.7] - 2025-11-30
+
+        - Added
+            - **PostgreSQL Database Integration**: Full database support for scraping results
+                - New files: database_writer.py, database_writer_v2.py (connection pooling, UPSERT logic, retry handling)
+                - New files: db_source_reader.py, db_source_reader_v2.py (multi-server concurrent batch claiming)
+                - New files: create_table.sql, schema_migration.sql (51 columns schema)
+                - New folder: migrations/ (partitioned schema v3 with 32 hash partitions for 100M+ scale)
+                - Connection pooling with ThreadedConnectionPool (min=1, max=5 per server)
+                - UPSERT semantics with array merging for emails/phones/whatsapp
+                - Retry logic with exponential backoff (3 attempts)
+
+            - **Dashboard Planning**: Web-based monitoring dashboard structure
+                - New folder: dashboard/ with README.md, requirements.txt, .env.example
+                - Materialized views for performance (sql/materialized_views.sql)
+                - API endpoints spec: /api/stats, /api/countries, /api/servers, /api/export
+                - CSV export with column selection and filtering support
+
+            - **Database Audit Report**: Comprehensive schema analysis for 1M+ scale
+                - New file: DATABASE_AUDIT_REPORT.md
+                - Indexing strategy analysis
+                - Concurrent execution patterns review
+                - Performance recommendations
+
+        - Fixed
+            - **CRITICAL: Advisory Lock Leakage**: Changed from session-level to transaction-level locks
+                - Before: pg_try_advisory_lock() - locks survive connection drops
+                - After: pg_try_advisory_xact_lock() - locks auto-release on commit/rollback
+                - Added claim_batch_safe() context manager for guaranteed lock release
+                - release_locks() now no-op (backward compatible)
+                - Files: db_source_reader.py, db_source_reader_v2.py
+
+            - **CRITICAL: Connection Pool Saturation Prevention**
+                - Reduced max_connections from 10 to 5 per server
+                - Before: 10 servers × 10 = 100 connections (at PostgreSQL limit!)
+                - After: 10 servers × 5 = 50 connections (safe margin)
+                - Reduced min_connections from 2 to 1 (less idle resources)
+                - Files: db_source_reader.py, db_source_reader_v2.py, database_writer.py, database_writer_v2.py
+
+        - Technical Details
+            - Advisory lock fix prevents orphaned locks when server crashes mid-batch
+            - Context manager usage: `with reader.claim_batch_safe(100) as rows: process(rows)`
+            - Connection pool sizing: 10 servers × 5 connections = 50 < 100 (PostgreSQL default max_connections)
+            - Dashboard uses FastAPI + Materialized Views for sub-50ms query response at 1M+ rows
+
 ##### [0.1.6] - 2025-11-29
 
         - Fixed
