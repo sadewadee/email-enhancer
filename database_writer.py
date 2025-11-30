@@ -667,6 +667,126 @@ class DatabaseWriter:
         except Exception as e:
             self.logger.error(f"Error preparing pending row: {e}")
             return False
+    
+    # =========================================================================
+    # SERVER REGISTRATION METHODS
+    # =========================================================================
+    
+    def register_server(self, server_id: str, server_name: str = None, 
+                       region: str = None, workers: int = 6, batch_size: int = 100) -> bool:
+        """Register server in zen_servers table."""
+        import socket
+        
+        if not server_name:
+            server_name = server_id
+        
+        conn = self.pool.getconn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO zen_servers (
+                    server_id, server_name, server_region, workers_count, batch_size,
+                    status, session_id, session_started, started_at, last_heartbeat, server_hostname
+                ) VALUES (%s, %s, %s, %s, %s, 'online', %s, NOW(), NOW(), NOW(), %s)
+                ON CONFLICT (server_id) DO UPDATE SET
+                    server_name = EXCLUDED.server_name,
+                    server_region = EXCLUDED.server_region,
+                    workers_count = EXCLUDED.workers_count,
+                    batch_size = EXCLUDED.batch_size,
+                    status = 'online',
+                    session_id = EXCLUDED.session_id,
+                    session_started = NOW(),
+                    session_processed = 0,
+                    session_errors = 0,
+                    last_heartbeat = NOW()
+            """, (
+                server_id, server_name, region, workers, batch_size,
+                f"{server_id}_{int(time.time())}", socket.gethostname()
+            ))
+            conn.commit()
+            self.logger.info(f"Server {server_id} registered")
+            return True
+        except Exception as e:
+            self.logger.error(f"Failed to register server: {e}")
+            if conn:
+                conn.rollback()
+            return False
+        finally:
+            self.pool.putconn(conn)
+    
+    def unregister_server(self, server_id: str) -> bool:
+        """Mark server as offline."""
+        conn = self.pool.getconn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE zen_servers SET status = 'offline', current_task = NULL
+                WHERE server_id = %s
+            """, (server_id,))
+            conn.commit()
+            self.logger.info(f"Server {server_id} unregistered")
+            return True
+        except Exception as e:
+            self.logger.error(f"Failed to unregister server: {e}")
+            return False
+        finally:
+            self.pool.putconn(conn)
+    
+    def server_heartbeat(self, server_id: str, current_task: str = None, 
+                        urls_per_minute: float = None) -> bool:
+        """Send heartbeat to update server status."""
+        conn = self.pool.getconn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE zen_servers SET
+                    last_heartbeat = NOW(),
+                    status = 'online',
+                    current_task = COALESCE(%s, current_task),
+                    urls_per_minute = COALESCE(%s, urls_per_minute)
+                WHERE server_id = %s
+            """, (current_task, urls_per_minute, server_id))
+            conn.commit()
+            return True
+        except Exception as e:
+            self.logger.warning(f"Heartbeat failed: {e}")
+            return False
+        finally:
+            self.pool.putconn(conn)
+    
+    def update_server_stats(self, server_id: str, processed: int = 0, success: int = 0,
+                           failed: int = 0, emails: int = 0, phones: int = 0, 
+                           whatsapp: int = 0) -> bool:
+        """Update server statistics after batch processing."""
+        conn = self.pool.getconn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE zen_servers SET
+                    total_processed = total_processed + %s,
+                    total_success = total_success + %s,
+                    total_failed = total_failed + %s,
+                    total_emails_found = total_emails_found + %s,
+                    total_phones_found = total_phones_found + %s,
+                    total_whatsapp_found = total_whatsapp_found + %s,
+                    session_processed = session_processed + %s,
+                    last_activity = NOW(),
+                    last_heartbeat = NOW(),
+                    success_rate = CASE 
+                        WHEN (total_processed + %s) > 0 
+                        THEN ((total_success + %s)::NUMERIC / (total_processed + %s) * 100)
+                        ELSE 0 
+                    END
+                WHERE server_id = %s
+            """, (processed, success, failed, emails, phones, whatsapp, 
+                  processed, processed, success, processed, server_id))
+            conn.commit()
+            return True
+        except Exception as e:
+            self.logger.warning(f"Stats update failed: {e}")
+            return False
+        finally:
+            self.pool.putconn(conn)
 
 
 def create_database_writer(logger: logging.Logger) -> Optional[DatabaseWriter]:

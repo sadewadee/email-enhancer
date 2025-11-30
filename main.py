@@ -522,6 +522,11 @@ class EmailScraperValidator:
                 self.logger.error(f"[{server_id}] Run: migrations/schema_v3_complete.sql")
                 source_reader.close()
                 return {'status': 'failed', 'error': 'Schema validation failed - run migrations/schema_v3_complete.sql'}
+            
+            # Register server in zen_servers table
+            workers = self.config.get('max_workers', 6)
+            db_writer.register_server(server_id, workers=workers, batch_size=batch_size)
+            
         except ImportError as e:
             self.logger.error(f"[{server_id}] Failed to import database_writer: {e}")
             source_reader.close()
@@ -662,6 +667,20 @@ class EmailScraperValidator:
         
         finally:
             pbar.close()
+            # Update server stats and unregister
+            try:
+                db_writer.update_server_stats(
+                    server_id, 
+                    processed=stats['total_processed'],
+                    success=stats['successful'],
+                    failed=stats['failed'],
+                    emails=stats['total_emails'],
+                    phones=stats['total_phones'],
+                    whatsapp=stats['total_whatsapp']
+                )
+                db_writer.unregister_server(server_id)
+            except:
+                pass
             source_reader.close()
             db_writer.close()
         
