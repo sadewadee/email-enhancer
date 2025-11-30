@@ -19,6 +19,7 @@ from pathlib import Path
 dashboard_dir = Path(__file__).parent
 sys.path.insert(0, str(dashboard_dir))
 
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -41,11 +42,39 @@ logger = logging.getLogger(__name__)
 # Load config
 config = load_config()
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Lifespan event handler for startup and shutdown."""
+    # Startup
+    logger.info("Starting Zenvoyer Dashboard...")
+    db = init_database(config)
+    
+    tables_status = {
+        'zen_contacts': db.table_exists('zen_contacts'),
+        'results': db.table_exists('results'),
+        'zen_servers': db.table_exists('zen_servers'),
+        'gmpas_job': db.table_exists('gmpas_job')
+    }
+    logger.info(f"Tables status: {tables_status}")
+    
+    yield
+    
+    # Shutdown
+    try:
+        db = get_database()
+        db.close()
+    except:
+        pass
+    logger.info("Dashboard shutdown complete")
+
+
 # Create FastAPI app
 app = FastAPI(
     title="Zenvoyer Dashboard",
     description="Monitoring dashboard for email enhancer scraping system",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan
 )
 
 # CORS middleware
@@ -68,34 +97,6 @@ templates = Jinja2Templates(directory=str(templates_path))
 # Include routers
 app.include_router(api_router)
 app.include_router(export_router)
-
-
-@app.on_event("startup")
-async def startup_event():
-    """Initialize database connection on startup."""
-    logger.info("Starting Zenvoyer Dashboard...")
-    db = init_database(config)
-    
-    # Check available tables
-    tables_status = {
-        'zen_contacts': db.table_exists('zen_contacts'),
-        'results': db.table_exists('results'),
-        'zen_servers': db.table_exists('zen_servers'),
-        'gmpas_job': db.table_exists('gmpas_job')
-    }
-    
-    logger.info(f"Tables status: {tables_status}")
-
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Close database connection on shutdown."""
-    try:
-        db = get_database()
-        db.close()
-    except:
-        pass
-    logger.info("Dashboard shutdown complete")
 
 
 @app.get("/", response_class=HTMLResponse)
