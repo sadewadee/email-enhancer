@@ -114,7 +114,7 @@ class DBSourceReader:
         WHERE NOT EXISTS (
             SELECT 1 FROM zen_contacts sc 
             WHERE sc.source_link = r.data->>'link'
-            AND sc.partition_key = ABS(hashtext(r.data->>'link')) % 32
+            AND sc.partition_key = MOD(ABS(hashtext(r.data->>'link')), 32)
         )
         AND r.data->>'web_site' IS NOT NULL
         AND r.data->>'web_site' != ''
@@ -127,18 +127,29 @@ class DBSourceReader:
         conn = self.pool.getconn()
         try:
             cursor = conn.cursor()
+            self.logger.info(f"[{self.server_id}] Executing claim query...")
             cursor.execute(query, (batch_size,))
+            self.logger.info(f"[{self.server_id}] Query executed, fetching rows...")
             rows = cursor.fetchall()
+            self.logger.info(f"[{self.server_id}] Fetched {len(rows)} rows")
+            
+            # Debug: show first row structure
+            if rows:
+                self.logger.info(f"[{self.server_id}] First row type: {type(rows[0])}, len: {len(rows[0]) if hasattr(rows[0], '__len__') else 'N/A'}")
             
             claimed = []
             for row in rows:
                 try:
+                    if not row or len(row) < 2:
+                        self.logger.warning(f"[{self.server_id}] Invalid row structure: {row}")
+                        continue
                     parsed = self._parse_row(row)
                     if parsed:
                         claimed.append(parsed)
                         self._claimed_ids.append(parsed['result_id'])
                 except Exception as e:
-                    self.logger.warning(f"[{self.server_id}] Parse error for row {row[0]}: {e}")
+                    row_id = row[0] if row and len(row) > 0 else 'unknown'
+                    self.logger.warning(f"[{self.server_id}] Parse error for row {row_id}: {e}")
                     # No manual release needed - xact locks auto-release
             
             # Don't commit - keep transaction open to hold locks
@@ -149,7 +160,9 @@ class DBSourceReader:
             return claimed
             
         except Exception as e:
+            import traceback
             self.logger.error(f"[{self.server_id}] Claim error: {e}")
+            self.logger.error(f"[{self.server_id}] Traceback: {traceback.format_exc()}")
             if conn:
                 conn.rollback()
             return []
@@ -188,7 +201,7 @@ class DBSourceReader:
         WHERE NOT EXISTS (
             SELECT 1 FROM zen_contacts sc 
             WHERE sc.source_link = r.data->>'link'
-            AND sc.partition_key = ABS(hashtext(r.data->>'link')) % 32
+            AND sc.partition_key = MOD(ABS(hashtext(r.data->>'link')), 32)
         )
         AND r.data->>'web_site' IS NOT NULL
         AND r.data->>'web_site' != ''
@@ -293,7 +306,7 @@ class DBSourceReader:
         WHERE NOT EXISTS (
             SELECT 1 FROM zen_contacts sc 
             WHERE sc.source_link = r.data->>'link'
-            AND sc.partition_key = ABS(hashtext(r.data->>'link')) % 32
+            AND sc.partition_key = MOD(ABS(hashtext(r.data->>'link')), 32)
         )
         AND r.data->>'web_site' IS NOT NULL
         AND r.data->>'web_site' != ''
@@ -331,7 +344,7 @@ class DBSourceReader:
         WHERE EXISTS (
             SELECT 1 FROM zen_contacts sc 
             WHERE sc.source_link = r.data->>'link'
-            AND sc.partition_key = ABS(hashtext(r.data->>'link')) % 32
+            AND sc.partition_key = MOD(ABS(hashtext(r.data->>'link')), 32)
         );
         """
         
@@ -356,7 +369,7 @@ class DBSourceReader:
         WHERE NOT EXISTS (
             SELECT 1 FROM zen_contacts sc 
             WHERE sc.source_link = r.data->>'link'
-            AND sc.partition_key = ABS(hashtext(r.data->>'link')) % 32
+            AND sc.partition_key = MOD(ABS(hashtext(r.data->>'link')), 32)
         )
         AND r.data->>'web_site' IS NOT NULL
         AND r.data->>'web_site' != ''
