@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zenvoyer Dashboard</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Zenvoyer Dashboard</h1>
+            <div class="header-actions">
+                <span id="last-updated">Loading...</span>
+                <button onclick="refreshData()" class="btn btn-primary">Refresh</button>
+                <a href="/export" class="btn btn-secondary">Export CSV</a>
+            </div>
+        </header>
+
+        <!-- Overview Stats -->
+        <section class="stats-grid" id="overview-stats">
+            <div class="stat-card">
+                <h3>Source Total</h3>
+                <div class="stat-value" id="source-total">-</div>
+                <div class="stat-label">results table</div>
+            </div>
+            <div class="stat-card">
+                <h3>Enriched</h3>
+                <div class="stat-value" id="enriched-total">-</div>
+                <div class="stat-label">zen_contacts</div>
+            </div>
+            <div class="stat-card highlight">
+                <h3>Pending</h3>
+                <div class="stat-value" id="pending-total">-</div>
+                <div class="stat-label">awaiting processing</div>
+            </div>
+            <div class="stat-card success">
+                <h3>Success Rate</h3>
+                <div class="stat-value" id="success-rate">-</div>
+                <div class="stat-label">of processed</div>
+            </div>
+        </section>
+
+        <!-- Contact Stats -->
+        <section class="stats-grid" id="contact-stats">
+            <div class="stat-card">
+                <h3>Emails Found</h3>
+                <div class="stat-value" id="total-emails">-</div>
+                <div class="stat-label" id="rows-with-email">- rows</div>
+            </div>
+            <div class="stat-card">
+                <h3>Phones Found</h3>
+                <div class="stat-value" id="total-phones">-</div>
+                <div class="stat-label" id="rows-with-phone">- rows</div>
+            </div>
+            <div class="stat-card">
+                <h3>WhatsApp Found</h3>
+                <div class="stat-value" id="total-whatsapp">-</div>
+                <div class="stat-label" id="rows-with-whatsapp">- rows</div>
+            </div>
+            <div class="stat-card">
+                <h3>Activity</h3>
+                <div class="stat-value" id="processed-24h">-</div>
+                <div class="stat-label">last 24h</div>
+            </div>
+        </section>
+
+        <!-- Server Status -->
+        <section class="card" id="servers-section">
+            <h2>Server Status <span class="badge" id="servers-online">0 online</span></h2>
+            <div class="table-container">
+                <table id="servers-table">
+                    <thead>
+                        <tr>
+                            <th>Server</th>
+                            <th>Region</th>
+                            <th>Status</th>
+                            <th>Health</th>
+                            <th>Processed</th>
+                            <th>Rate</th>
+                            <th>Success %</th>
+                            <th>Last Activity</th>
+                        </tr>
+                    </thead>
+                    <tbody id="servers-body">
+                        <tr><td colspan="8" class="loading">Loading...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- Country Progress -->
+        <section class="card" id="countries-section">
+            <h2>Country Progress <span class="badge" id="countries-count">0 countries</span></h2>
+            <div class="table-container">
+                <table id="countries-table">
+                    <thead>
+                        <tr>
+                            <th>Country</th>
+                            <th>Source</th>
+                            <th>Enriched</th>
+                            <th>Pending</th>
+                            <th>Progress</th>
+                            <th>Emails</th>
+                            <th>WhatsApp</th>
+                            <th>Avg Time</th>
+                        </tr>
+                    </thead>
+                    <tbody id="countries-body">
+                        <tr><td colspan="8" class="loading">Loading...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- Recent Activity -->
+        <section class="card" id="activity-section">
+            <h2>Recent Activity</h2>
+            <div class="table-container">
+                <table id="activity-table">
+                    <thead>
+                        <tr>
+                            <th>Business</th>
+                            <th>Country</th>
+                            <th>Status</th>
+                            <th>Emails</th>
+                            <th>Phones</th>
+                            <th>WA</th>
+                            <th>Time</th>
+                            <th>Updated</th>
+                        </tr>
+                    </thead>
+                    <tbody id="activity-body">
+                        <tr><td colspan="8" class="loading">Loading...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    </div>
+
+    <script src="/static/js/dashboard.js"></script>
+</body>
+</html>

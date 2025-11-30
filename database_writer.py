@@ -475,6 +475,198 @@ class DatabaseWriter:
             }
         finally:
             self.pool.putconn(conn)
+    
+    # =========================================================================
+    # FAILURE TRACKING METHODS
+    # =========================================================================
+    
+    def mark_failed(self, source_link: str, error: str, server_id: str = 'unknown') -> bool:
+        """
+        Mark a row as failed with error message.
+        Increments retry_count for exponential backoff.
+        """
+        conn = self.pool.getconn()
+        try:
+            cursor = conn.cursor()
+            partition_key = self._get_partition_key(source_link)
+            
+            cursor.execute("""
+                UPDATE zen_contacts SET
+                    scrape_status = 'failed',
+                    scrape_error = %s,
+                    retry_count = COALESCE(retry_count, 0) + 1,
+                    last_scrape_server = %s,
+                    last_scrape_at = NOW(),
+                    updated_at = NOW()
+                WHERE source_link = %s
+                AND partition_key = %s
+            """, (error[:500] if error else '', server_id, source_link, partition_key))
+            
+            conn.commit()
+            return cursor.rowcount > 0
+            
+        except Exception as e:
+            self.logger.error(f"Failed to mark row as failed: {e}")
+            if conn:
+                conn.rollback()
+            return False
+        finally:
+            self.pool.putconn(conn)
+    
+    def mark_success(self, source_link: str, server_id: str = 'unknown') -> bool:
+        """Mark a row as successfully processed."""
+        conn = self.pool.getconn()
+        try:
+            cursor = conn.cursor()
+            partition_key = self._get_partition_key(source_link)
+            
+            cursor.execute("""
+                UPDATE zen_contacts SET
+                    scrape_status = 'success',
+                    scrape_error = NULL,
+                    last_scrape_server = %s,
+                    last_scrape_at = NOW(),
+                    updated_at = NOW()
+                WHERE source_link = %s
+                AND partition_key = %s
+            """, (server_id, source_link, partition_key))
+            
+            conn.commit()
+            return cursor.rowcount > 0
+            
+        except Exception as e:
+            self.logger.error(f"Failed to mark row as success: {e}")
+            if conn:
+                conn.rollback()
+            return False
+        finally:
+            self.pool.putconn(conn)
+    
+    def get_retryable_rows(
+        self, 
+        batch_size: int = 100, 
+        max_retries: int = 3,
+        retry_delay_minutes: int = 30,
+        country_filter: str = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Get failed rows eligible for retry.
+        
+        Args:
+            batch_size: Number of rows to return
+            max_retries: Maximum retry attempts before giving up
+            retry_delay_minutes: Minimum time between retries
+            country_filter: Optional ISO country code filter
+        """
+        country_clause = ""
+        if country_filter:
+            country_clause = f"AND country_code = '{country_filter.upper()[:2]}'"
+        
+        query = f"""
+            SELECT 
+                source_link,
+                partition_key,
+                business_website,
+                business_name,
+                country_code,
+                retry_count,
+                scrape_error,
+                source_id
+            FROM zen_contacts
+            WHERE scrape_status = 'failed'
+            AND COALESCE(retry_count, 0) < %s
+            AND (last_scrape_at IS NULL OR last_scrape_at < NOW() - INTERVAL '%s minutes')
+            {country_clause}
+            ORDER BY retry_count ASC, last_scrape_at ASC NULLS FIRST
+            LIMIT %s
+        """
+        
+        conn = self.pool.getconn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(query, (max_retries, retry_delay_minutes, batch_size))
+            
+            columns = [desc[0] for desc in cursor.description]
+            return [dict(zip(columns, row)) for row in cursor.fetchall()]
+            
+        except Exception as e:
+            self.logger.error(f"Failed to get retryable rows: {e}")
+            return []
+        finally:
+            self.pool.putconn(conn)
+    
+    def get_failure_stats(self) -> Dict[str, Any]:
+        """Get failure statistics for monitoring."""
+        conn = self.pool.getconn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT 
+                    COUNT(*) FILTER (WHERE scrape_status = 'failed') as total_failed,
+                    COUNT(*) FILTER (WHERE scrape_status = 'failed' AND COALESCE(retry_count, 0) = 0) as failed_no_retry,
+                    COUNT(*) FILTER (WHERE scrape_status = 'failed' AND COALESCE(retry_count, 0) = 1) as failed_retry_1,
+                    COUNT(*) FILTER (WHERE scrape_status = 'failed' AND COALESCE(retry_count, 0) = 2) as failed_retry_2,
+                    COUNT(*) FILTER (WHERE scrape_status = 'failed' AND COALESCE(retry_count, 0) >= 3) as failed_max_retries,
+                    COUNT(*) FILTER (WHERE scrape_status = 'failed' AND COALESCE(retry_count, 0) < 3) as eligible_for_retry
+                FROM zen_contacts
+            """)
+            row = cursor.fetchone()
+            return {
+                'total_failed': row[0] or 0,
+                'failed_no_retry': row[1] or 0,
+                'failed_retry_1': row[2] or 0,
+                'failed_retry_2': row[3] or 0,
+                'failed_max_retries': row[4] or 0,
+                'eligible_for_retry': row[5] or 0,
+            }
+        except Exception as e:
+            self.logger.error(f"Failed to get failure stats: {e}")
+            return {}
+        finally:
+            self.pool.putconn(conn)
+    
+    def insert_pending_row(self, row_data: Dict[str, Any], server_id: str = 'unknown') -> bool:
+        """
+        Insert a row as pending (claimed but not yet processed).
+        Used for tracking rows that were claimed from source but not yet enriched.
+        """
+        try:
+            prepared = self._prepare_row(row_data)
+            if not prepared.get('link'):
+                return False
+            
+            conn = self.pool.getconn()
+            try:
+                cursor = conn.cursor()
+                
+                cursor.execute("""
+                    INSERT INTO zen_contacts (
+                        source_link, partition_key, country_code, country_name, 
+                        business_name, business_category, business_website,
+                        source_id, scrape_status, last_scrape_server
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'pending', %s)
+                    ON CONFLICT (source_link, partition_key) DO NOTHING
+                """, (
+                    prepared['link'], prepared['partition_key'],
+                    prepared['country'], prepared['country_name'],
+                    prepared['title'], prepared['category'], prepared['website'],
+                    prepared['source_id'], server_id
+                ))
+                
+                conn.commit()
+                return cursor.rowcount > 0
+                
+            except Exception as e:
+                self.logger.error(f"Failed to insert pending row: {e}")
+                if conn:
+                    conn.rollback()
+                return False
+            finally:
+                self.pool.putconn(conn)
+                
+        except Exception as e:
+            self.logger.error(f"Error preparing pending row: {e}")
+            return False
 
 
 def create_database_writer(logger: logging.Logger) -> Optional[DatabaseWriter]:

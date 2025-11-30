@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Export CSV - Zenvoyer Dashboard</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Export CSV</h1>
+            <div class="header-actions">
+                <a href="/" class="btn btn-secondary">Back to Dashboard</a>
+            </div>
+        </header>
+
+        <div class="export-container">
+            <!-- Column Selection -->
+            <section class="card">
+                <h2>Select Columns</h2>
+                <div class="column-groups">
+                    <div class="column-group">
+                        <h4>Identity</h4>
+                        <label><input type="checkbox" name="column" value="id"> ID</label>
+                        <label><input type="checkbox" name="column" value="source_link"> Source Link</label>
+                        <label><input type="checkbox" name="column" value="source_id"> Source ID</label>
+                    </div>
+                    <div class="column-group">
+                        <h4>Business</h4>
+                        <label><input type="checkbox" name="column" value="business_name" checked> Business Name</label>
+                        <label><input type="checkbox" name="column" value="business_category"> Category</label>
+                        <label><input type="checkbox" name="column" value="business_website"> Website</label>
+                    </div>
+                    <div class="column-group">
+                        <h4>Location</h4>
+                        <label><input type="checkbox" name="column" value="country_code" checked> Country Code</label>
+                        <label><input type="checkbox" name="column" value="country_name"> Country Name</label>
+                        <label><input type="checkbox" name="column" value="city"> City</label>
+                        <label><input type="checkbox" name="column" value="state"> State</label>
+                        <label><input type="checkbox" name="column" value="address"> Address</label>
+                        <label><input type="checkbox" name="column" value="postal_code"> Postal Code</label>
+                    </div>
+                    <div class="column-group">
+                        <h4>Contacts</h4>
+                        <label><input type="checkbox" name="column" value="emails" checked> Emails</label>
+                        <label><input type="checkbox" name="column" value="emails_count"> Email Count</label>
+                        <label><input type="checkbox" name="column" value="phones" checked> Phones</label>
+                        <label><input type="checkbox" name="column" value="phones_count"> Phone Count</label>
+                        <label><input type="checkbox" name="column" value="whatsapp"> WhatsApp</label>
+                        <label><input type="checkbox" name="column" value="whatsapp_count"> WA Count</label>
+                    </div>
+                    <div class="column-group">
+                        <h4>Social Media</h4>
+                        <label><input type="checkbox" name="column" value="social_facebook"> Facebook</label>
+                        <label><input type="checkbox" name="column" value="social_instagram"> Instagram</label>
+                        <label><input type="checkbox" name="column" value="social_tiktok"> TikTok</label>
+                        <label><input type="checkbox" name="column" value="social_youtube"> YouTube</label>
+                    </div>
+                    <div class="column-group">
+                        <h4>Metadata</h4>
+                        <label><input type="checkbox" name="column" value="scrape_status"> Status</label>
+                        <label><input type="checkbox" name="column" value="scrape_time_seconds"> Scrape Time</label>
+                        <label><input type="checkbox" name="column" value="updated_at"> Updated At</label>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Filters -->
+            <section class="card">
+                <h2>Filters</h2>
+                <div class="filters-grid">
+                    <div class="filter-item">
+                        <label for="filter-country">Country (comma separated)</label>
+                        <input type="text" id="filter-country" placeholder="ID, SG, MY">
+                    </div>
+                    <div class="filter-item">
+                        <label for="filter-status">Status</label>
+                        <select id="filter-status">
+                            <option value="">All</option>
+                            <option value="success">Success</option>
+                            <option value="failed">Failed</option>
+                            <option value="pending">Pending</option>
+                        </select>
+                    </div>
+                    <div class="filter-item">
+                        <label for="filter-has-email">Has Email</label>
+                        <select id="filter-has-email">
+                            <option value="">All</option>
+                            <option value="true">Yes</option>
+                            <option value="false">No</option>
+                        </select>
+                    </div>
+                    <div class="filter-item">
+                        <label for="filter-has-whatsapp">Has WhatsApp</label>
+                        <select id="filter-has-whatsapp">
+                            <option value="">All</option>
+                            <option value="true">Yes</option>
+                            <option value="false">No</option>
+                        </select>
+                    </div>
+                    <div class="filter-item">
+                        <label for="filter-category">Category (contains)</label>
+                        <input type="text" id="filter-category" placeholder="restaurant">
+                    </div>
+                    <div class="filter-item">
+                        <label for="filter-limit">Max Rows</label>
+                        <input type="number" id="filter-limit" value="10000" min="1" max="100000">
+                    </div>
+                </div>
+            </section>
+
+            <!-- Preview -->
+            <section class="card">
+                <h2>Preview</h2>
+                <div id="preview-info">
+                    <p>Click "Preview" to see matching rows</p>
+                </div>
+                <div class="table-container">
+                    <table id="preview-table" style="display: none;">
+                        <thead id="preview-head"></thead>
+                        <tbody id="preview-body"></tbody>
+                    </table>
+                </div>
+            </section>
+
+            <!-- Actions -->
+            <section class="export-actions">
+                <button onclick="previewExport()" class="btn btn-secondary">Preview</button>
+                <button onclick="downloadExport()" class="btn btn-primary">Download CSV</button>
+            </section>
+        </div>
+    </div>
+
+    <script>
+        function getSelectedColumns() {
+            const checkboxes = document.querySelectorAll('input[name="column"]:checked');
+            return Array.from(checkboxes).map(cb => cb.value);
+        }
+
+        function getFilters() {
+            const filters = {};
+            
+            const country = document.getElementById('filter-country').value.trim();
+            if (country) {
+                filters.country_code = country.split(',').map(c => c.trim().toUpperCase());
+            }
+            
+            const status = document.getElementById('filter-status').value;
+            if (status) filters.scrape_status = status;
+            
+            const hasEmail = document.getElementById('filter-has-email').value;
+            if (hasEmail === 'true') filters.has_email = true;
+            
+            const hasWhatsapp = document.getElementById('filter-has-whatsapp').value;
+            if (hasWhatsapp === 'true') filters.has_whatsapp = true;
+            
+            const category = document.getElementById('filter-category').value.trim();
+            if (category) filters.category = category;
+            
+            return filters;
+        }
+
+        async function previewExport() {
+            const columns = getSelectedColumns();
+            const filters = getFilters();
+            
+            if (columns.length === 0) {
+                alert('Please select at least one column');
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/export/preview', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ columns, filters, limit: 10 })
+                });
+                
+                const data = await response.json();
+                
+                document.getElementById('preview-info').innerHTML = 
+                    `<p><strong>${data.total_matching.toLocaleString()}</strong> rows matching filters</p>`;
+                
+                // Build table
+                const table = document.getElementById('preview-table');
+                const thead = document.getElementById('preview-head');
+                const tbody = document.getElementById('preview-body');
+                
+                thead.innerHTML = '<tr>' + data.columns.map(c => `<th>${c}</th>`).join('') + '</tr>';
+                tbody.innerHTML = data.preview_rows.map(row => 
+                    '<tr>' + data.columns.map(c => `<td>${row[c] || ''}</td>`).join('') + '</tr>'
+                ).join('');
+                
+                table.style.display = 'table';
+            } catch (error) {
+                alert('Error: ' + error.message);
+            }
+        }
+
+        async function downloadExport() {
+            const columns = getSelectedColumns();
+            const filters = getFilters();
+            const limit = parseInt(document.getElementById('filter-limit').value) || 10000;
+            
+            if (columns.length === 0) {
+                alert('Please select at least one column');
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/export', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ columns, filters, limit })
+                });
+                
+                if (!response.ok) throw new Error('Export failed');
+                
+                const blob = await response.blob();
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `zenvoyer_export_${new Date().toISOString().slice(0,10)}.csv`;
+                document.body.appendChild(a);
+                a.click();
+                window.URL.revokeObjectURL(url);
+                a.remove();
+            } catch (error) {
+                alert('Error: ' + error.message);
+            }
+        }
+    </script>
+</body>
+</html>
