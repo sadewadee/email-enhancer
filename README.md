@@ -163,15 +163,39 @@ python setup_database.py
 psql -h localhost -U your_user -d your_db -f create_table.sql
 ```
 
-### Usage
+### Usage Modes
 
+**Mode 1: CSV Input → CSV Output (default)**
 ```bash
-# CSV export only (default)
 python main.py single input.csv --workers 5
+```
 
-# CSV + PostgreSQL export
+**Mode 2: CSV Input → CSV + PostgreSQL Output**
+```bash
 python main.py single input.csv --workers 5 --export-db
 ```
+
+**Mode 3: PostgreSQL Input → PostgreSQL Output (DSN Mode)**
+```bash
+# Read from 'results' table, write to 'zen_contacts'
+python main.py single --dsn --workers 5
+
+# With server ID (for multi-server tracking)
+python main.py single --dsn --server-id sg-01 --workers 5
+
+# With batch size and limit
+python main.py single --dsn --batch-size-dsn 100 --limit-dsn 1000
+```
+
+### DSN Mode Flags
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--dsn` | Enable DSN mode (read from results table) | Off |
+| `--server-id ID` | Unique server identifier (e.g., sg-01) | hostname |
+| `--batch-size-dsn N` | Rows to claim per batch | 100 |
+| `--limit-dsn N` | Max total rows to process | None (all) |
+| `--export-db` | Also required for DSN mode | - |
 
 ### Database Schema
 
@@ -201,15 +225,30 @@ Key features:
 
 ## Multi-Server Deployment
 
-Run multiple servers concurrently without processing duplicates.
+Run multiple servers concurrently without processing duplicates using DSN mode.
 
 ### How It Works
 
 1. **Advisory Locks**: Each server claims rows using PostgreSQL transaction-level locks
 2. **Auto-Release**: Locks automatically release on commit/rollback (no orphaned locks)
-3. **Completion Tracking**: `scraped_contacts.link` serves as implicit "done" marker
+3. **Completion Tracking**: `zen_contacts.source_link` serves as implicit "done" marker
 
-### Usage
+### CLI Usage (Recommended)
+
+```bash
+# Server 1 (Singapore)
+python main.py single --dsn --server-id sg-01 --workers 5 --batch-size-dsn 100
+
+# Server 2 (Indonesia)
+python main.py single --dsn --server-id id-01 --workers 5 --batch-size-dsn 100
+
+# Server 3 (US)
+python main.py single --dsn --server-id us-01 --workers 5 --batch-size-dsn 100
+
+# Each server automatically claims unique rows via advisory locks
+```
+
+### Programmatic Usage
 
 ```python
 from db_source_reader import create_db_source_reader
