@@ -491,8 +491,8 @@ def create_database_writer_v2(logger: logging.Logger) -> Optional[DatabaseWriter
             database=os.getenv('DB_NAME', 'zenvoyer_db'),
             user=os.getenv('DB_USER', 'postgres'),
             password=os.getenv('DB_PASSWORD', ''),
-            min_connections=int(os.getenv('DB_MIN_CONNECTIONS', '2')),
-            max_connections=int(os.getenv('DB_MAX_CONNECTIONS', '10')),
+            min_connections=int(os.getenv('DB_MIN_CONNECTIONS', '1')),
+            max_connections=min(int(os.getenv('DB_MAX_CONNECTIONS', '5')), 5),  # Capped at 5
             connect_timeout=int(os.getenv('DB_CONNECT_TIMEOUT', '10')),
             statement_timeout=int(os.getenv('DB_STATEMENT_TIMEOUT', '60000')),
         )
