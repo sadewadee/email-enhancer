@@ -563,6 +563,9 @@ class EmailScraperValidator:
         # Create progress bar with limit-aware total
         pbar = tqdm(total=target_count, desc=f"[{server_id}] Enriching", unit="url")
         
+        # Track last heartbeat time
+        last_heartbeat = time.time()
+        
         try:
             while True:
                 # Check if we've reached the limit
@@ -583,8 +586,25 @@ class EmailScraperValidator:
                 
                 # Process each row in batch
                 results = []
+                batch_emails = 0
+                batch_phones = 0
+                batch_whatsapp = 0
+                batch_success = 0
+                batch_failed = 0
+                
                 for row in batch:
                     try:
+                        # Send heartbeat every 30 seconds
+                        if time.time() - last_heartbeat > 30:
+                            elapsed = time.time() - stats['start_time']
+                            rate = stats['total_processed'] / (elapsed / 60) if elapsed > 60 else 0
+                            db_writer.server_heartbeat(
+                                server_id, 
+                                current_task=f"Processing {stats['total_processed']}/{target_count}",
+                                urls_per_minute=rate
+                            )
+                            last_heartbeat = time.time()
+                        
                         url = row.get('url', '')
                         link = row.get('link', '')
                         
@@ -630,22 +650,44 @@ class EmailScraperValidator:
                         
                         # Update stats
                         stats['total_processed'] += 1
+                        emails_found = len(scrape_result.get('emails', []))
+                        phones_found = len(scrape_result.get('phones', []))
+                        whatsapp_found = len(scrape_result.get('whatsapp', []))
+                        
                         if scrape_result.get('status') == 'success':
                             stats['successful'] += 1
+                            batch_success += 1
                         else:
                             stats['failed'] += 1
-                        stats['total_emails'] += len(scrape_result.get('emails', []))
-                        stats['total_phones'] += len(scrape_result.get('phones', []))
-                        stats['total_whatsapp'] += len(scrape_result.get('whatsapp', []))
+                            batch_failed += 1
+                        
+                        stats['total_emails'] += emails_found
+                        stats['total_phones'] += phones_found
+                        stats['total_whatsapp'] += whatsapp_found
+                        batch_emails += emails_found
+                        batch_phones += phones_found
+                        batch_whatsapp += whatsapp_found
                         
                     except Exception as e:
                         self.logger.warning(f"[{server_id}] Error processing row {row.get('result_id')}: {e}")
                         stats['failed'] += 1
+                        batch_failed += 1
                 
                 # Batch write to database
                 if results:
-                    written = db_writer.upsert_batch(results)
+                    written = db_writer.upsert_batch(results, server_id)
                     self.logger.debug(f"[{server_id}] Wrote {written} rows to database")
+                    
+                    # Update server stats after each batch
+                    db_writer.update_server_stats(
+                        server_id,
+                        processed=len(results),
+                        success=batch_success,
+                        failed=batch_failed,
+                        emails=batch_emails,
+                        phones=batch_phones,
+                        whatsapp=batch_whatsapp
+                    )
                 
                 # Release locks for processed batch
                 result_ids = [r.get('result_id') for r in batch if r.get('result_id')]
@@ -668,20 +710,12 @@ class EmailScraperValidator:
         
         finally:
             pbar.close()
-            # Update server stats and unregister
+            # Unregister server (stats already updated after each batch)
             try:
-                db_writer.update_server_stats(
-                    server_id, 
-                    processed=stats['total_processed'],
-                    success=stats['successful'],
-                    failed=stats['failed'],
-                    emails=stats['total_emails'],
-                    phones=stats['total_phones'],
-                    whatsapp=stats['total_whatsapp']
-                )
+                self.logger.info(f"[{server_id}] Unregistering server...")
                 db_writer.unregister_server(server_id)
-            except:
-                pass
+            except Exception as e:
+                self.logger.warning(f"[{server_id}] Failed to unregister: {e}")
             source_reader.close()
             db_writer.close()
         

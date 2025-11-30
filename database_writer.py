@@ -720,14 +720,20 @@ class DatabaseWriter:
         try:
             cursor = conn.cursor()
             cursor.execute("""
-                UPDATE zen_servers SET status = 'offline', current_task = NULL
+                UPDATE zen_servers SET 
+                    status = 'offline', 
+                    current_task = NULL,
+                    last_activity = NOW()
                 WHERE server_id = %s
             """, (server_id,))
+            rows_affected = cursor.rowcount
             conn.commit()
-            self.logger.info(f"Server {server_id} unregistered")
-            return True
+            self.logger.info(f"Server {server_id} unregistered (rows affected: {rows_affected})")
+            return rows_affected > 0
         except Exception as e:
-            self.logger.error(f"Failed to unregister server: {e}")
+            self.logger.error(f"Failed to unregister server {server_id}: {e}")
+            if conn:
+                conn.rollback()
             return False
         finally:
             self.pool.putconn(conn)
