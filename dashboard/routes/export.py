@@ -5,7 +5,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
 from datetime import datetime
-from ..services.exporter import ExportService, AVAILABLE_COLUMNS, ALL_COLUMNS
+from services.exporter import ExportService, AVAILABLE_COLUMNS, ALL_COLUMNS
 
 router = APIRouter(prefix="/api", tags=["export"])
 

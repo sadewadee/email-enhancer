@@ -15,8 +15,9 @@ import argparse
 import logging
 from pathlib import Path
 
-# Add parent directory to path for imports
-sys.path.insert(0, str(Path(__file__).parent))
+# Add dashboard directory to path for imports
+dashboard_dir = Path(__file__).parent
+sys.path.insert(0, str(dashboard_dir))
 
 from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles

@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, HTTPException, Query
 from typing import Optional, List
-from ..services.stats import StatsService
+from services.stats import StatsService
 
 router = APIRouter(prefix="/api", tags=["api"])
 

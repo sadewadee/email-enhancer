@@ -4,7 +4,7 @@ import csv
 import io
 from typing import Dict, Any, List, Optional
 from datetime import datetime
-from ..database import get_database
+from database import get_database
 import logging
 
 logger = logging.getLogger(__name__)
