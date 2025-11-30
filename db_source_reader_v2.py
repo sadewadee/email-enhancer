@@ -115,7 +115,7 @@ class DBSourceReaderV2:
         WHERE NOT EXISTS (
             SELECT 1 FROM zen_contacts sc 
             WHERE sc.source_link = r.data->>'link'
-            AND sc.partition_key = ABS(hashtext(r.data->>'link')) %% 32
+            AND sc.partition_key = ABS(hashtext(r.data->>'link')) % 32
         )
         AND r.data->>'web_site' IS NOT NULL
         AND r.data->>'web_site' != ''
@@ -189,7 +189,7 @@ class DBSourceReaderV2:
         WHERE NOT EXISTS (
             SELECT 1 FROM zen_contacts sc 
             WHERE sc.source_link = r.data->>'link'
-            AND sc.partition_key = ABS(hashtext(r.data->>'link')) %% 32
+            AND sc.partition_key = ABS(hashtext(r.data->>'link')) % 32
         )
         AND r.data->>'web_site' IS NOT NULL
         AND r.data->>'web_site' != ''
@@ -294,7 +294,7 @@ class DBSourceReaderV2:
         WHERE NOT EXISTS (
             SELECT 1 FROM zen_contacts sc 
             WHERE sc.source_link = r.data->>'link'
-            AND sc.partition_key = ABS(hashtext(r.data->>'link')) %% 32
+            AND sc.partition_key = ABS(hashtext(r.data->>'link')) % 32
         )
         AND r.data->>'web_site' IS NOT NULL
         AND r.data->>'web_site' != ''
