@@ -1,11 +1,12 @@
 # Email Scraper & Validator
 
-A comprehensive tool to extract and validate contact information (emails, phone numbers, WhatsApp) from websites at scale. Designed with anti-bot bypass, parallel processing, proxy rotation, and robust post-processing.
+A comprehensive tool to extract and validate contact information (emails, phone numbers, WhatsApp) from websites at scale. Designed with anti-bot bypass, parallel processing, proxy rotation, PostgreSQL integration, and robust post-processing.
 
 - Language: Python 3.9+
 - Scraping: Scrapling [all] (Playwright + stealth/Camoufox)
 - Parsing: BeautifulSoup4
 - Data: pandas, tqdm
+- Database: PostgreSQL (psycopg2) with connection pooling
 - Validation: email-validator, py3-validate-email, validate_email
 - Extras: TypeScript/Puppeteer helper for public proxy collection
 
@@ -15,6 +16,8 @@ A comprehensive tool to extract and validate contact information (emails, phone 
 - Installation
 - Quick Start
 - CLI Usage and Options
+- PostgreSQL Database Integration
+- Multi-Server Deployment
 - Proxies
 - Outputs
 - Google Sheets Integration
@@ -123,6 +126,130 @@ python main.py url https://example.com --output results/example.csv
 
 ---
 
+## PostgreSQL Database Integration
+
+Export scraping results directly to PostgreSQL database alongside CSV output.
+
+### Setup
+
+1. **Install dependencies:**
+```bash
+pip install psycopg2-binary python-dotenv
+```
+
+2. **Configure database credentials:**
+```bash
+# Copy example and edit with your credentials
+cp .env.example .env
+```
+
+Edit `.env`:
+```bash
+DB_HOST=localhost
+DB_PORT=5432
+DB_NAME=your_database
+DB_USER=your_username
+DB_PASSWORD=your_password
+
+# Connection pool (optional)
+DB_MIN_CONNECTIONS=1
+DB_MAX_CONNECTIONS=5
+```
+
+3. **Create database table:**
+```bash
+python setup_database.py
+# Or manually:
+psql -h localhost -U your_user -d your_db -f create_table.sql
+```
+
+### Usage
+
+```bash
+# CSV export only (default)
+python main.py single input.csv --workers 5
+
+# CSV + PostgreSQL export
+python main.py single input.csv --workers 5 --export-db
+```
+
+### Database Schema
+
+The `scraped_contacts` table has 51 columns:
+- **Business Info**: title, category, website, address
+- **Google Maps Data**: rating, reviews, phone, coordinates
+- **Enriched Contacts**: emails[], phones[], whatsapp[]
+- **Social Media**: facebook, instagram, tiktok, youtube
+- **Metadata**: scraping_status, processing_time, scrape_count
+
+Key features:
+- **UPSERT**: Updates existing rows, merges contact arrays
+- **Connection Pooling**: Thread-safe, max 5 connections per server
+- **Retry Logic**: 3 attempts with exponential backoff
+
+### Database Files
+
+| File | Purpose |
+|------|---------|
+| `database_writer.py` | Write results to DB (UPSERT) |
+| `db_source_reader.py` | Read pending rows from source table |
+| `create_table.sql` | Schema for `scraped_contacts` |
+| `schema_migration.sql` | Add columns to existing table |
+| `migrations/` | Advanced partitioned schema (100M+ scale) |
+
+---
+
+## Multi-Server Deployment
+
+Run multiple servers concurrently without processing duplicates.
+
+### How It Works
+
+1. **Advisory Locks**: Each server claims rows using PostgreSQL transaction-level locks
+2. **Auto-Release**: Locks automatically release on commit/rollback (no orphaned locks)
+3. **Completion Tracking**: `scraped_contacts.link` serves as implicit "done" marker
+
+### Usage
+
+```python
+from db_source_reader import create_db_source_reader
+
+reader = create_db_source_reader('server-01', logger)
+reader.connect()
+
+# Safe batch processing with automatic lock release
+with reader.claim_batch_safe(batch_size=100) as rows:
+    for row in rows:
+        result = scrape_url(row['url'])
+        db_writer.upsert_contact(result)
+# Locks auto-released here (commit on success, rollback on error)
+```
+
+### Server Capacity
+
+| Servers | Connections Each | Total | PostgreSQL Limit |
+|---------|------------------|-------|------------------|
+| 5       | 5                | 25    | OK (< 100)       |
+| 10      | 5                | 50    | OK (< 100)       |
+| 20      | 5                | 100   | At limit!        |
+
+Connection pool is capped at 5 per server to prevent saturation.
+
+### Partition by Country (Recommended)
+
+For simpler setup, partition workload by country:
+```bash
+# Server 1: Indonesia
+python main.py single country/indonesia.csv --workers 5 --export-db
+
+# Server 2: Singapore
+python main.py single country/singapore.csv --workers 5 --export-db
+
+# No overlap = no lock contention
+```
+
+---
+
 ## Proxies
 - Provide proxies in `proxy.txt` (ignored by git) with one per line:
   - username:password@host:port
@@ -220,7 +347,62 @@ Templates are provided in the repository root.
 
 ---
 
+## Dashboard (Planning)
+
+A web-based monitoring dashboard is planned for tracking scraping progress.
+
+### Features (Planned)
+- Real-time progress per country
+- Server health monitoring
+- CSV export with column selection
+- Hourly statistics charts
+
+### Structure
+```
+dashboard/
+├── README.md              # Documentation
+├── requirements.txt       # FastAPI, psycopg2, pandas
+├── sql/
+│   └── materialized_views.sql  # Optimized queries for 1M+ rows
+├── routes/                # API endpoints
+├── services/              # Business logic
+├── templates/             # HTML templates
+└── static/                # CSS/JS
+```
+
+See `dashboard/README.md` for detailed documentation.
+
+---
+
 ## Troubleshooting
+
+### Database Issues
+
+**Connection refused:**
+```bash
+# Check if PostgreSQL is running
+pg_isready -h localhost -p 5432
+
+# Verify credentials in .env
+cat .env | grep DB_
+```
+
+**Table not found:**
+```bash
+# Create table
+python setup_database.py
+
+# Or run SQL directly
+psql -f create_table.sql
+```
+
+**Too many connections:**
+- Reduce `--workers` or number of servers
+- Connection pool is capped at 5 per server
+- Check PostgreSQL `max_connections` setting
+
+### Scraping Issues
+
 Cloudflare blocks frequently
 - Try `--no-network-idle`, increase `--cf-wait-timeout`, or `--skip-on-challenge`
 - Ensure proxies are healthy; rotate or replace low-quality endpoints
