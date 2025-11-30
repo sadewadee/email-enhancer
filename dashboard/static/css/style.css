@@ -306,6 +306,71 @@ td.loading {
     color: #4f46e5;
 }
 
+/* Skeleton Loading */
+.skeleton {
+    background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
+    background-size: 200% 100%;
+    animation: skeleton-loading 1.5s infinite;
+    border-radius: 4px;
+}
+
+@keyframes skeleton-loading {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+}
+
+.skeleton-text {
+    height: 20px;
+    margin: 8px 0;
+}
+
+.skeleton-value {
+    height: 36px;
+    width: 80%;
+    margin: 8px 0;
+}
+
+.skeleton-row {
+    height: 48px;
+    margin: 4px 0;
+}
+
+.stat-card.loading .stat-value,
+.stat-card.loading .stat-label {
+    color: transparent;
+    position: relative;
+}
+
+.stat-card.loading .stat-value::after,
+.stat-card.loading .stat-label::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
+    background-size: 200% 100%;
+    animation: skeleton-loading 1.5s infinite;
+    border-radius: 4px;
+}
+
+/* Loading state for tables */
+.table-loading {
+    opacity: 0.6;
+    pointer-events: none;
+}
+
+/* Fade in animation */
+.fade-in {
+    animation: fadeIn 0.3s ease-in;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
 /* Responsive */
 @media (max-width: 768px) {
     header {

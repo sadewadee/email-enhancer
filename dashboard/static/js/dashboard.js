@@ -1,7 +1,9 @@
-// Zenvoyer Dashboard JavaScript
+// Zenvoyer Dashboard JavaScript - Optimized with Skeleton Loading
 
 const API_BASE = '';
 let refreshInterval = null;
+let cache = {};
+const CACHE_TTL = 10000; // 10 seconds cache
 
 // Format numbers with commas
 function formatNumber(num) {
@@ -27,12 +29,62 @@ function timeAgo(dateStr) {
     return Math.floor(seconds / 86400) + 'd ago';
 }
 
-// Fetch data from API
-async function fetchAPI(endpoint) {
+// Show skeleton loading for stat cards
+function showStatsSkeleton() {
+    document.querySelectorAll('.stat-card').forEach(card => {
+        card.classList.add('loading');
+    });
+}
+
+// Hide skeleton loading
+function hideStatsSkeleton() {
+    document.querySelectorAll('.stat-card').forEach(card => {
+        card.classList.remove('loading');
+    });
+}
+
+// Show table skeleton
+function showTableSkeleton(tableId, rows = 5) {
+    const tbody = document.getElementById(tableId);
+    if (!tbody) return;
+    
+    const cols = tbody.closest('table').querySelectorAll('th').length;
+    let html = '';
+    for (let i = 0; i < rows; i++) {
+        html += '<tr class="skeleton-row">';
+        for (let j = 0; j < cols; j++) {
+            html += '<td><div class="skeleton skeleton-text"></div></td>';
+        }
+        html += '</tr>';
+    }
+    tbody.innerHTML = html;
+}
+
+// Fetch with cache
+async function fetchAPI(endpoint, useCache = true) {
+    const cacheKey = endpoint;
+    const now = Date.now();
+    
+    // Check cache
+    if (useCache && cache[cacheKey] && (now - cache[cacheKey].time) < CACHE_TTL) {
+        return cache[cacheKey].data;
+    }
+    
     try {
-        const response = await fetch(API_BASE + endpoint);
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 15000); // 15s timeout
+        
+        const response = await fetch(API_BASE + endpoint, {
+            signal: controller.signal
+        });
+        clearTimeout(timeout);
+        
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        return await response.json();
+        const data = await response.json();
+        
+        // Update cache
+        cache[cacheKey] = { data, time: now };
+        return data;
     } catch (error) {
         console.error(`API error (${endpoint}):`, error);
         return null;
@@ -62,8 +114,8 @@ async function updateStats() {
     document.getElementById('rows-with-whatsapp').textContent = formatNumber(data.rows_with_whatsapp) + ' rows';
     document.getElementById('processed-24h').textContent = formatNumber(data.processed_24h);
     
-    document.getElementById('last-updated').textContent = 
-        'Updated: ' + new Date().toLocaleTimeString();
+    hideStatsSkeleton();
+    document.getElementById('last-updated').textContent = 'Updated: ' + new Date().toLocaleTimeString();
 }
 
 // Update servers table
@@ -83,7 +135,7 @@ async function updateServers() {
     }
     
     tbody.innerHTML = servers.map(s => `
-        <tr>
+        <tr class="fade-in">
             <td><strong>${s.server_name || s.server_id}</strong></td>
             <td>${s.server_region || '-'}</td>
             <td class="status-${s.status}">${s.status}</td>
@@ -112,7 +164,7 @@ async function updateCountries() {
     }
     
     tbody.innerHTML = countries.slice(0, 50).map(c => `
-        <tr>
+        <tr class="fade-in">
             <td><strong>${c.country_code}</strong></td>
             <td>${formatNumber(c.source_total)}</td>
             <td>${formatNumber(c.enriched_total)}</td>
@@ -144,7 +196,7 @@ async function updateActivity() {
     }
     
     tbody.innerHTML = activity.map(a => `
-        <tr>
+        <tr class="fade-in">
             <td>${(a.business_name || '').substring(0, 40)}</td>
             <td>${a.country_code}</td>
             <td class="status-${a.scrape_status}">${a.scrape_status}</td>
@@ -157,8 +209,15 @@ async function updateActivity() {
     `).join('');
 }
 
-// Refresh all data
+// Refresh all data - parallel loading
 async function refreshData() {
+    // Show skeleton loading
+    showStatsSkeleton();
+    showTableSkeleton('servers-body', 3);
+    showTableSkeleton('countries-body', 5);
+    showTableSkeleton('activity-body', 5);
+    
+    // Fetch all data in parallel
     await Promise.all([
         updateStats(),
         updateServers(),
@@ -170,7 +229,11 @@ async function refreshData() {
 // Auto-refresh every 30 seconds
 function startAutoRefresh() {
     if (refreshInterval) clearInterval(refreshInterval);
-    refreshInterval = setInterval(refreshData, 30000);
+    refreshInterval = setInterval(() => {
+        // Clear cache before refresh
+        cache = {};
+        refreshData();
+    }, 30000);
 }
 
 // Initialize

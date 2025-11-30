@@ -1,11 +1,31 @@
-"""Statistics service for dashboard queries."""
+"""Statistics service for dashboard queries with caching."""
 
 from typing import Dict, Any, List, Optional
 from datetime import datetime, timedelta
 from database import get_database
 import logging
+import time
 
 logger = logging.getLogger(__name__)
+
+# Simple in-memory cache
+_cache: Dict[str, Any] = {}
+_cache_times: Dict[str, float] = {}
+CACHE_TTL = 10  # seconds
+
+
+def _get_cached(key: str):
+    """Get cached value if not expired."""
+    if key in _cache and key in _cache_times:
+        if time.time() - _cache_times[key] < CACHE_TTL:
+            return _cache[key]
+    return None
+
+
+def _set_cached(key: str, value: Any):
+    """Set cache value."""
+    _cache[key] = value
+    _cache_times[key] = time.time()
 
 
 class StatsService:
@@ -14,6 +34,10 @@ class StatsService:
     @staticmethod
     def get_overview() -> Dict[str, Any]:
         """Get main dashboard overview stats."""
+        cached = _get_cached('overview')
+        if cached:
+            return cached
+        
         db = get_database()
         
         # Check what tables exist
@@ -123,11 +147,16 @@ class StatsService:
         except Exception as e:
             logger.error(f"Error fetching overview stats: {e}")
         
+        _set_cached('overview', stats)
         return stats
     
     @staticmethod
     def get_countries() -> List[Dict[str, Any]]:
         """Get progress per country."""
+        cached = _get_cached('countries')
+        if cached is not None:
+            return cached
+        
         db = get_database()
         
         if not db.table_exists('zen_contacts'):
@@ -206,7 +235,9 @@ class StatsService:
                 ORDER BY enriched_total DESC
                 """
             
-            return db.execute_query(query)
+            result = db.execute_query(query)
+            _set_cached('countries', result)
+            return result
             
         except Exception as e:
             logger.error(f"Error fetching countries: {e}")

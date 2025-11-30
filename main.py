@@ -525,7 +525,8 @@ class EmailScraperValidator:
             
             # Register server in zen_servers table
             workers = self.config.get('max_workers', 6)
-            db_writer.register_server(server_id, workers=workers, batch_size=batch_size)
+            if not db_writer.register_server(server_id, workers=workers, batch_size=batch_size):
+                self.logger.warning(f"[{server_id}] Failed to register server (zen_servers table may not exist)")
             
         except ImportError as e:
             self.logger.error(f"[{server_id}] Failed to import database_writer: {e}")
