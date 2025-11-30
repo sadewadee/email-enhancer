@@ -2,6 +2,7 @@
 
 const API_BASE = '';
 let refreshInterval = null;
+let currentInterval = 60000; // default 1 min
 let cache = {};
 const CACHE_TTL = 10000; // 10 seconds cache
 
@@ -226,14 +227,46 @@ async function refreshData() {
     ]);
 }
 
-// Auto-refresh every 30 seconds
+// Change refresh interval
+function changeRefreshInterval() {
+    const select = document.getElementById('refresh-interval');
+    currentInterval = parseInt(select.value);
+    
+    // Clear existing interval
+    if (refreshInterval) {
+        clearInterval(refreshInterval);
+        refreshInterval = null;
+    }
+    
+    // Set new interval (0 = manual only)
+    if (currentInterval > 0) {
+        refreshInterval = setInterval(() => {
+            cache = {}; // Clear cache before refresh
+            refreshData();
+        }, currentInterval);
+    }
+    
+    // Save preference to localStorage
+    localStorage.setItem('dashboardRefreshInterval', currentInterval);
+}
+
+// Start auto-refresh with saved or default interval
 function startAutoRefresh() {
-    if (refreshInterval) clearInterval(refreshInterval);
-    refreshInterval = setInterval(() => {
-        // Clear cache before refresh
-        cache = {};
-        refreshData();
-    }, 30000);
+    // Restore saved preference
+    const saved = localStorage.getItem('dashboardRefreshInterval');
+    if (saved !== null) {
+        currentInterval = parseInt(saved);
+        const select = document.getElementById('refresh-interval');
+        if (select) select.value = currentInterval;
+    }
+    
+    // Start interval if not manual
+    if (currentInterval > 0) {
+        refreshInterval = setInterval(() => {
+            cache = {};
+            refreshData();
+        }, currentInterval);
+    }
 }
 
 // Initialize

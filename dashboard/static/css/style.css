@@ -46,6 +46,21 @@ header h1 {
     font-size: 14px;
 }
 
+#refresh-interval {
+    padding: 8px 12px;
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
+    font-size: 14px;
+    background: white;
+    cursor: pointer;
+}
+
+#refresh-interval:focus {
+    outline: none;
+    border-color: #4f46e5;
+    box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.1);
+}
+
 /* Buttons */
 .btn {
     padding: 8px 16px;

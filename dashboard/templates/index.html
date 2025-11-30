@@ -12,7 +12,15 @@
             <h1>Zenvoyer Dashboard</h1>
             <div class="header-actions">
                 <span id="last-updated">Loading...</span>
-                <button onclick="refreshData()" class="btn btn-primary">Refresh</button>
+                <button onclick="refreshData()" class="btn btn-primary">↻ Refresh</button>
+                <select id="refresh-interval" onchange="changeRefreshInterval()">
+                    <option value="0">Manual</option>
+                    <option value="10000">10s</option>
+                    <option value="30000">30s</option>
+                    <option value="60000" selected>1 min</option>
+                    <option value="120000">2 min</option>
+                    <option value="300000">5 min</option>
+                </select>
                 <a href="/export" class="btn btn-secondary">Export CSV</a>
             </div>
         </header>
