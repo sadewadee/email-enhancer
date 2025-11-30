@@ -486,10 +486,10 @@ class EmailScraperValidator:
         self.logger.info(f"[{server_id}] Starting DSN mode - reading from results table")
         self.logger.info(f"[{server_id}] Batch size: {batch_size}" + (f", Limit: {limit_dsn}" if limit_dsn else ""))
         
-        # Initialize DB source reader (V2 - uses zen_contacts)
+        # Initialize DB source reader (uses zen_contacts)
         try:
-            from db_source_reader_v2 import create_db_source_reader_v2
-            source_reader = create_db_source_reader_v2(server_id, logging.getLogger())
+            from db_source_reader import create_db_source_reader
+            source_reader = create_db_source_reader(server_id, logging.getLogger())
             
             if source_reader is None:
                 self.logger.error(f"[{server_id}] Failed to create DB source reader")
@@ -499,13 +499,13 @@ class EmailScraperValidator:
                 self.logger.error(f"[{server_id}] Failed to connect to database")
                 return {'status': 'failed', 'error': 'Database connection failed'}
         except ImportError as e:
-            self.logger.error(f"[{server_id}] Failed to import db_source_reader_v2: {e}")
+            self.logger.error(f"[{server_id}] Failed to import db_source_reader: {e}")
             return {'status': 'failed', 'error': str(e)}
         
-        # Initialize DB writer for output (V2 - writes to zen_contacts)
+        # Initialize DB writer for output (writes to zen_contacts)
         try:
-            from database_writer_v2 import create_database_writer_v2
-            db_writer = create_database_writer_v2(logging.getLogger())
+            from database_writer import create_database_writer
+            db_writer = create_database_writer(logging.getLogger())
             
             if db_writer is None:
                 self.logger.error(f"[{server_id}] Failed to create database writer")
@@ -523,7 +523,7 @@ class EmailScraperValidator:
                 source_reader.close()
                 return {'status': 'failed', 'error': 'Schema validation failed - run migrations/schema_v3_complete.sql'}
         except ImportError as e:
-            self.logger.error(f"[{server_id}] Failed to import database_writer_v2: {e}")
+            self.logger.error(f"[{server_id}] Failed to import database_writer: {e}")
             source_reader.close()
             return {'status': 'failed', 'error': str(e)}
         

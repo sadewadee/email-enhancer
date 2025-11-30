@@ -199,7 +199,7 @@ python main.py single --dsn --batch-size-dsn 100 --limit-dsn 1000
 
 ### Database Schema
 
-The `scraped_contacts` table has 51 columns:
+The `zen_contacts` table (partitioned, 32 partitions) has ~60 columns:
 - **Business Info**: title, category, website, address
 - **Google Maps Data**: rating, reviews, phone, coordinates
 - **Enriched Contacts**: emails[], phones[], whatsapp[]
@@ -215,11 +215,9 @@ Key features:
 
 | File | Purpose |
 |------|---------|
-| `database_writer.py` | Write results to DB (UPSERT) |
-| `db_source_reader.py` | Read pending rows from source table |
-| `create_table.sql` | Schema for `scraped_contacts` |
-| `schema_migration.sql` | Add columns to existing table |
-| `migrations/` | Advanced partitioned schema (100M+ scale) |
+| `database_writer.py` | Write results to `zen_contacts` (UPSERT) |
+| `db_source_reader.py` | Read pending rows from `results` table |
+| `migrations/schema_v3_complete.sql` | Full schema for `zen_contacts` (partitioned) |
 
 ---
 
