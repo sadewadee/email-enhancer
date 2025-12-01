@@ -880,6 +880,30 @@ class CSVProcessor:
                                 return ''
 
                             # ============================================================================
+                            # WAHA WHATSAPP VALIDATION
+                            # ============================================================================
+                            # Validate WhatsApp numbers using WAHA API
+                            # Flow: 1) Check existing whatsapp first, 2) If invalid, check phone_number
+                            #       3) If both invalid, whatsapp column will be empty
+                            waha_validated_whatsapp = None
+                            try:
+                                scraped_whatsapp = whatsapp_list[0] if whatsapp_list else None
+                                csv_phone_number = get_value('phone_number')
+                                csv_country_code = get_value('country_code')
+                                
+                                waha_validated_whatsapp = self.whatsapp_validator.validate_for_whatsapp(
+                                    whatsapp=scraped_whatsapp,
+                                    phone_number=csv_phone_number,
+                                    country_code=csv_country_code
+                                )
+                                
+                                if waha_validated_whatsapp:
+                                    self.logger.debug(f"WAHA validated WhatsApp for {url}: {waha_validated_whatsapp}")
+                            except Exception as e:
+                                self.logger.debug(f"WAHA validation error for {url}: {e}")
+                                waha_validated_whatsapp = whatsapp_list[0] if whatsapp_list else None
+
+                            # ============================================================================
                             # PREPARE OUTPUT ROW WITH REDIRECT TRACKING
                             # ============================================================================
                             # Track whether URL was redirected during scraping
@@ -904,16 +928,13 @@ class CSVProcessor:
                                 'was_redirected': was_redirected,
                                 'emails': '; '.join(emails_list),
                                 'phones': '; '.join(result.get('phones', []) or []),
-                                'whatsapp': '; '.join(whatsapp_list),
+                                'whatsapp': waha_validated_whatsapp or '',
                                 'email': get_value('email'),
                                 'validated_emails': '; '.join([
                                     f"{email} (reason:{validation_result.get('reason', 'unknown')}, conf:{validation_result.get('confidence', 'unknown')}, big:{validation_result.get('is_big_provider', False)})"
                                     for email, validation_result in validated_emails.items()
                                 ]),
-                                'validated_whatsapp': '; '.join([
-                                    f"{number} (valid:{validation_result.get('valid', False)}, type:{validation_result.get('type', 'unknown')}, country:{validation_result.get('country', 'unknown')}, reason:{validation_result.get('reason', 'unknown')})"
-                                    for number, validation_result in validated_whatsapp.items()
-                                ]),
+                                'validated_whatsapp': f"{waha_validated_whatsapp} (waha_valid)" if waha_validated_whatsapp else '',
                                 'scraping_status': result['status'],
                                 'scraping_error': result.get('error', ''),
                                 'processing_time': result.get('processing_time', 0),
@@ -922,7 +943,7 @@ class CSVProcessor:
                                 'phones_found': phones_count,
                                 'whatsapp_found': whatsapp_count,
                                 'validated_emails_count': validated_emails_count,
-                                'validated_whatsapp_count': validated_whatsapp_count,
+                                'validated_whatsapp_count': 1 if waha_validated_whatsapp else 0,
                             }
 
                             # ============================================================================

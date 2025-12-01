@@ -77,3 +77,4 @@ backup/
 *.backup*
 *.bak
 server_setup.sh
+*.complete
