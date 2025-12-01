@@ -1,4 +1,4 @@
-/* Zenvoyer Dashboard Styles */
+/* InsightHub Dashboard Styles */
 
 * {
     margin: 0;
@@ -98,6 +98,26 @@ header h1 {
     grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
     gap: 16px;
     margin-bottom: 24px;
+}
+
+.stats-grid-5 {
+    grid-template-columns: repeat(5, 1fr);
+}
+
+.stats-grid-3 {
+    grid-template-columns: repeat(3, 1fr);
+}
+
+@media (max-width: 1200px) {
+    .stats-grid-5 {
+        grid-template-columns: repeat(3, 1fr);
+    }
+}
+
+@media (max-width: 768px) {
+    .stats-grid-5, .stats-grid-3 {
+        grid-template-columns: repeat(2, 1fr);
+    }
 }
 
 .stat-card {
@@ -205,22 +225,22 @@ td.loading {
 .status-failed { color: #ef4444; }
 .status-pending { color: #6b7280; }
 
-.health-healthy { 
-    background: #d1fae5; 
+.health-healthy {
+    background: #d1fae5;
     color: #059669;
     padding: 2px 8px;
     border-radius: 4px;
     font-size: 12px;
 }
-.health-warning { 
-    background: #fef3c7; 
+.health-warning {
+    background: #fef3c7;
     color: #d97706;
     padding: 2px 8px;
     border-radius: 4px;
     font-size: 12px;
 }
-.health-critical { 
-    background: #fee2e2; 
+.health-critical {
+    background: #fee2e2;
     color: #dc2626;
     padding: 2px 8px;
     border-radius: 4px;
@@ -393,11 +413,11 @@ td.loading {
         gap: 16px;
         align-items: flex-start;
     }
-    
+
     .stats-grid {
         grid-template-columns: repeat(2, 1fr);
     }
-    
+
     .column-groups {
         grid-template-columns: repeat(2, 1fr);
     }

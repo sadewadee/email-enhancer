@@ -1,4 +1,4 @@
-// Zenvoyer Dashboard JavaScript - Optimized with Skeleton Loading
+// InsightHub Dashboard JavaScript - Optimized with Skeleton Loading
 
 const API_BASE = '';
 let refreshInterval = null;
@@ -23,7 +23,7 @@ function timeAgo(dateStr) {
     if (!dateStr) return '-';
     const date = new Date(dateStr);
     const seconds = Math.floor((new Date() - date) / 1000);
-    
+
     if (seconds < 60) return seconds + 's ago';
     if (seconds < 3600) return Math.floor(seconds / 60) + 'm ago';
     if (seconds < 86400) return Math.floor(seconds / 3600) + 'h ago';
@@ -48,7 +48,7 @@ function hideStatsSkeleton() {
 function showTableSkeleton(tableId, rows = 5) {
     const tbody = document.getElementById(tableId);
     if (!tbody) return;
-    
+
     const cols = tbody.closest('table').querySelectorAll('th').length;
     let html = '';
     for (let i = 0; i < rows; i++) {
@@ -65,24 +65,24 @@ function showTableSkeleton(tableId, rows = 5) {
 async function fetchAPI(endpoint, useCache = true) {
     const cacheKey = endpoint;
     const now = Date.now();
-    
+
     // Check cache
     if (useCache && cache[cacheKey] && (now - cache[cacheKey].time) < CACHE_TTL) {
         return cache[cacheKey].data;
     }
-    
+
     try {
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), 15000); // 15s timeout
-        
+
         const response = await fetch(API_BASE + endpoint, {
             signal: controller.signal
         });
         clearTimeout(timeout);
-        
+
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const data = await response.json();
-        
+
         // Update cache
         cache[cacheKey] = { data, time: now };
         return data;
@@ -96,16 +96,16 @@ async function fetchAPI(endpoint, useCache = true) {
 async function updateStats() {
     const data = await fetchAPI('/api/stats');
     if (!data) return;
-    
+
     document.getElementById('source-total').textContent = formatNumber(data.source_total);
     document.getElementById('enriched-total').textContent = formatNumber(data.enriched_total);
     document.getElementById('pending-total').textContent = formatNumber(data.pending_total);
-    
+
     // Success rate
     const total = data.enriched_success + data.enriched_failed;
     const rate = total > 0 ? (data.enriched_success / total * 100) : 0;
     document.getElementById('success-rate').textContent = formatPercent(rate);
-    
+
     // Contact stats
     document.getElementById('total-emails').textContent = formatNumber(data.total_emails);
     document.getElementById('total-phones').textContent = formatNumber(data.total_phones);
@@ -113,8 +113,18 @@ async function updateStats() {
     document.getElementById('rows-with-email').textContent = formatNumber(data.rows_with_email) + ' rows';
     document.getElementById('rows-with-phone').textContent = formatNumber(data.rows_with_phone) + ' rows';
     document.getElementById('rows-with-whatsapp').textContent = formatNumber(data.rows_with_whatsapp) + ' rows';
-    document.getElementById('processed-24h').textContent = formatNumber(data.processed_24h);
     
+    // Social media stats
+    const totalSocialEl = document.getElementById('total-social');
+    const rowsWithSocialEl = document.getElementById('rows-with-social');
+    if (totalSocialEl) totalSocialEl.textContent = formatNumber(data.total_social || 0);
+    if (rowsWithSocialEl) rowsWithSocialEl.textContent = formatNumber(data.rows_with_social || 0) + ' rows';
+    
+    // Activity stats
+    document.getElementById('processed-24h').textContent = formatNumber(data.processed_24h);
+    const processed1hEl = document.getElementById('processed-1h');
+    if (processed1hEl) processed1hEl.textContent = formatNumber(data.processed_1h || 0) + ' last hour';
+
     hideStatsSkeleton();
     document.getElementById('last-updated').textContent = 'Updated: ' + new Date().toLocaleTimeString();
 }
@@ -123,18 +133,18 @@ async function updateStats() {
 async function updateServers() {
     const data = await fetchAPI('/api/servers');
     if (!data) return;
-    
+
     const tbody = document.getElementById('servers-body');
     const servers = data.servers || [];
-    
-    document.getElementById('servers-online').textContent = 
+
+    document.getElementById('servers-online').textContent =
         servers.filter(s => s.status === 'online').length + ' online';
-    
+
     if (servers.length === 0) {
         tbody.innerHTML = '<tr><td colspan="8" class="loading">No servers registered</td></tr>';
         return;
     }
-    
+
     tbody.innerHTML = servers.map(s => `
         <tr class="fade-in">
             <td><strong>${s.server_name || s.server_id}</strong></td>
@@ -153,17 +163,17 @@ async function updateServers() {
 async function updateCountries() {
     const data = await fetchAPI('/api/countries');
     if (!data) return;
-    
+
     const tbody = document.getElementById('countries-body');
     const countries = data.countries || [];
-    
+
     document.getElementById('countries-count').textContent = countries.length + ' countries';
-    
+
     if (countries.length === 0) {
         tbody.innerHTML = '<tr><td colspan="8" class="loading">No data yet</td></tr>';
         return;
     }
-    
+
     tbody.innerHTML = countries.slice(0, 50).map(c => `
         <tr class="fade-in">
             <td><strong>${c.country_code}</strong></td>
@@ -187,15 +197,15 @@ async function updateCountries() {
 async function updateActivity() {
     const data = await fetchAPI('/api/recent?limit=50');
     if (!data) return;
-    
+
     const tbody = document.getElementById('activity-body');
     const activity = data.activity || [];
-    
+
     if (activity.length === 0) {
         tbody.innerHTML = '<tr><td colspan="8" class="loading">No recent activity</td></tr>';
         return;
     }
-    
+
     tbody.innerHTML = activity.map(a => `
         <tr class="fade-in">
             <td>${(a.business_name || '').substring(0, 40)}</td>
@@ -217,7 +227,7 @@ async function refreshData() {
     showTableSkeleton('servers-body', 3);
     showTableSkeleton('countries-body', 5);
     showTableSkeleton('activity-body', 5);
-    
+
     // Fetch all data in parallel
     await Promise.all([
         updateStats(),
@@ -231,13 +241,13 @@ async function refreshData() {
 function changeRefreshInterval() {
     const select = document.getElementById('refresh-interval');
     currentInterval = parseInt(select.value);
-    
+
     // Clear existing interval
     if (refreshInterval) {
         clearInterval(refreshInterval);
         refreshInterval = null;
     }
-    
+
     // Set new interval (0 = manual only)
     if (currentInterval > 0) {
         refreshInterval = setInterval(() => {
@@ -245,7 +255,7 @@ function changeRefreshInterval() {
             refreshData();
         }, currentInterval);
     }
-    
+
     // Save preference to localStorage
     localStorage.setItem('dashboardRefreshInterval', currentInterval);
 }
@@ -259,7 +269,7 @@ function startAutoRefresh() {
         const select = document.getElementById('refresh-interval');
         if (select) select.value = currentInterval;
     }
-    
+
     // Start interval if not manual
     if (currentInterval > 0) {
         refreshInterval = setInterval(() => {

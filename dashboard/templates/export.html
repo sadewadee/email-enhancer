@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Export CSV - Zenvoyer Dashboard</title>
+    <title>Export CSV - InsightHub Dashboard</title>
     <link rel="stylesheet" href="/static/css/style.css">
 </head>
 <body>
@@ -140,31 +140,31 @@
 
         function getFilters() {
             const filters = {};
-            
+
             const country = document.getElementById('filter-country').value.trim();
             if (country) {
                 filters.country_code = country.split(',').map(c => c.trim().toUpperCase());
             }
-            
+
             const status = document.getElementById('filter-status').value;
             if (status) filters.scrape_status = status;
-            
+
             const hasEmail = document.getElementById('filter-has-email').value;
             if (hasEmail === 'true') filters.has_email = true;
-            
+
             const hasWhatsapp = document.getElementById('filter-has-whatsapp').value;
             if (hasWhatsapp === 'true') filters.has_whatsapp = true;
-            
+
             const category = document.getElementById('filter-category').value.trim();
             if (category) filters.category = category;
-            
+
             return filters;
         }
 
         async function previewExport() {
             const columns = getSelectedColumns();
             const filters = getFilters();
-            
+
             if (columns.length === 0) {
                 alert('Please select at least one column');
                 return;
@@ -176,22 +176,22 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ columns, filters, limit: 10 })
                 });
-                
+
                 const data = await response.json();
-                
-                document.getElementById('preview-info').innerHTML = 
+
+                document.getElementById('preview-info').innerHTML =
                     `<p><strong>${data.total_matching.toLocaleString()}</strong> rows matching filters</p>`;
-                
+
                 // Build table
                 const table = document.getElementById('preview-table');
                 const thead = document.getElementById('preview-head');
                 const tbody = document.getElementById('preview-body');
-                
+
                 thead.innerHTML = '<tr>' + data.columns.map(c => `<th>${c}</th>`).join('') + '</tr>';
-                tbody.innerHTML = data.preview_rows.map(row => 
+                tbody.innerHTML = data.preview_rows.map(row =>
                     '<tr>' + data.columns.map(c => `<td>${row[c] || ''}</td>`).join('') + '</tr>'
                 ).join('');
-                
+
                 table.style.display = 'table';
             } catch (error) {
                 alert('Error: ' + error.message);
@@ -202,7 +202,7 @@
             const columns = getSelectedColumns();
             const filters = getFilters();
             const limit = parseInt(document.getElementById('filter-limit').value) || 10000;
-            
+
             if (columns.length === 0) {
                 alert('Please select at least one column');
                 return;
@@ -214,9 +214,9 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ columns, filters, limit })
                 });
-                
+
                 if (!response.ok) throw new Error('Export failed');
-                
+
                 const blob = await response.blob();
                 const url = window.URL.createObjectURL(blob);
                 const a = document.createElement('a');

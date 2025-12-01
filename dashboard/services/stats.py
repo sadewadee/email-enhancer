@@ -59,11 +59,14 @@ class StatsService:
             'rows_with_email': 0,
             'rows_with_phone': 0,
             'rows_with_whatsapp': 0,
+            'rows_with_social': 0,
+            'total_social': 0,
             'countries_processed': 0,
             'servers_online': 0,
             'servers_total': 0,
             'processed_24h': 0,
             'processed_1h': 0,
+            'rate_per_hour': 0,
             'gmpas_jobs_total': 0,
             'gmpas_jobs_running': 0,
             'generated_at': datetime.utcnow().isoformat()
@@ -80,14 +83,26 @@ class StatsService:
                     SELECT 
                         COUNT(*) AS total,
                         COUNT(*) FILTER (WHERE scrape_status = 'success') AS success,
-                        COUNT(*) FILTER (WHERE scrape_status = 'failed') AS failed,
-                        COUNT(*) FILTER (WHERE scrape_status = 'pending') AS pending,
+                        COUNT(*) FILTER (WHERE scrape_status IN ('failed', 'error')) AS failed,
+                        COUNT(*) FILTER (WHERE scrape_status NOT IN ('success', 'failed', 'error', 'no_contacts_found')) AS pending,
                         COALESCE(SUM(emails_count), 0) AS emails,
                         COALESCE(SUM(phones_count), 0) AS phones,
                         COALESCE(SUM(whatsapp_count), 0) AS whatsapp,
-                        COUNT(*) FILTER (WHERE has_email = TRUE) AS with_email,
-                        COUNT(*) FILTER (WHERE has_phone = TRUE) AS with_phone,
-                        COUNT(*) FILTER (WHERE has_whatsapp = TRUE) AS with_whatsapp,
+                        COUNT(*) FILTER (WHERE has_email = TRUE OR emails_count > 0) AS with_email,
+                        COUNT(*) FILTER (WHERE has_phone = TRUE OR phones_count > 0) AS with_phone,
+                        COUNT(*) FILTER (WHERE has_whatsapp = TRUE OR whatsapp_count > 0) AS with_whatsapp,
+                        COUNT(*) FILTER (WHERE 
+                            social_facebook IS NOT NULL OR 
+                            social_instagram IS NOT NULL OR 
+                            social_tiktok IS NOT NULL OR 
+                            social_youtube IS NOT NULL
+                        ) AS with_social,
+                        (
+                            COUNT(*) FILTER (WHERE social_facebook IS NOT NULL) +
+                            COUNT(*) FILTER (WHERE social_instagram IS NOT NULL) +
+                            COUNT(*) FILTER (WHERE social_tiktok IS NOT NULL) +
+                            COUNT(*) FILTER (WHERE social_youtube IS NOT NULL)
+                        ) AS social_total,
                         COUNT(DISTINCT country_code) AS countries,
                         COUNT(*) FILTER (WHERE updated_at > NOW() - INTERVAL '24 hours') AS last_24h,
                         COUNT(*) FILTER (WHERE updated_at > NOW() - INTERVAL '1 hour') AS last_1h
@@ -106,9 +121,13 @@ class StatsService:
                     stats['rows_with_email'] = e['with_email']
                     stats['rows_with_phone'] = e['with_phone']
                     stats['rows_with_whatsapp'] = e['with_whatsapp']
+                    stats['rows_with_social'] = e['with_social']
+                    stats['total_social'] = int(e['social_total'])
                     stats['countries_processed'] = e['countries']
                     stats['processed_24h'] = e['last_24h']
                     stats['processed_1h'] = e['last_1h']
+                    # Calculate rate per hour (based on last 1h activity)
+                    stats['rate_per_hour'] = e['last_1h']
             
             # Calculate pending (source - enriched)
             if has_results and has_zen_contacts:

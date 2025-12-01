@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Zenvoyer Dashboard - Standalone Monitoring Service
+InsightHub Dashboard - Standalone Monitoring Service
 
 A FastAPI-based dashboard for monitoring the email enhancer scraping system.
 Monitors: zen_contacts, results, gmpas_job tables.
@@ -47,9 +47,9 @@ config = load_config()
 async def lifespan(app: FastAPI):
     """Lifespan event handler for startup and shutdown."""
     # Startup
-    logger.info("Starting Zenvoyer Dashboard...")
+    logger.info("Starting InsightHub Dashboard...")
     db = init_database(config)
-    
+
     tables_status = {
         'zen_contacts': db.table_exists('zen_contacts'),
         'results': db.table_exists('results'),
@@ -57,9 +57,9 @@ async def lifespan(app: FastAPI):
         'gmpas_job': db.table_exists('gmpas_job')
     }
     logger.info(f"Tables status: {tables_status}")
-    
+
     yield
-    
+
     # Shutdown
     try:
         db = get_database()
@@ -71,7 +71,7 @@ async def lifespan(app: FastAPI):
 
 # Create FastAPI app
 app = FastAPI(
-    title="Zenvoyer Dashboard",
+    title="InsightHub Dashboard",
     description="Monitoring dashboard for email enhancer scraping system",
     version="1.0.0",
     lifespan=lifespan
@@ -113,14 +113,14 @@ async def export_page(request: Request):
 
 def main():
     """Run the dashboard server."""
-    parser = argparse.ArgumentParser(description='Zenvoyer Dashboard')
+    parser = argparse.ArgumentParser(description='InsightHub Dashboard')
     parser.add_argument('--host', default=config.host, help='Host to bind')
     parser.add_argument('--port', type=int, default=config.port, help='Port to bind')
     parser.add_argument('--reload', action='store_true', help='Enable auto-reload')
     args = parser.parse_args()
-    
+
     logger.info(f"Starting dashboard on {args.host}:{args.port}")
-    
+
     uvicorn.run(
         "app:app",
         host=args.host,

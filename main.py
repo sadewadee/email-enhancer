@@ -11,6 +11,8 @@ import logging
 import json
 import time
 import signal
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from typing import Dict, List, Optional, Any
 import traceback
@@ -552,6 +554,7 @@ class EmailScraperValidator:
         # Processing stats
         stats = {
             'total_processed': 0,
+            'total_written': 0,  # Track actual DB writes
             'successful': 0,
             'failed': 0,
             'total_emails': 0,
@@ -559,6 +562,9 @@ class EmailScraperValidator:
             'total_whatsapp': 0,
             'start_time': time.time(),
         }
+        
+        # Track claimed IDs to prevent re-processing
+        all_claimed_ids = set()
         
         # Create progress bar with limit-aware total
         pbar = tqdm(total=target_count, desc=f"[{server_id}] Enriching", unit="url")
@@ -577,14 +583,22 @@ class EmailScraperValidator:
                 remaining = (limit_dsn - stats['total_processed']) if limit_dsn else batch_size
                 claim_size = min(batch_size, remaining) if limit_dsn else batch_size
                 
-                # Claim batch of rows
-                batch = source_reader.claim_batch(claim_size)
+                # Claim batch of rows (exclude already-claimed IDs at query level)
+                batch = source_reader.claim_batch(claim_size, exclude_ids=all_claimed_ids)
                 
                 if not batch:
                     self.logger.info(f"[{server_id}] No more pending rows to claim")
                     break
                 
-                # Process each row in batch
+                # Track claimed IDs immediately to prevent re-claiming
+                for row in batch:
+                    result_id = row.get('result_id')
+                    if result_id:
+                        all_claimed_ids.add(result_id)
+                
+                self.logger.info(f"[{server_id}] Claimed {len(batch)} rows (total claimed: {len(all_claimed_ids)})")
+                
+                # Process batch in PARALLEL using ThreadPoolExecutor
                 results = []
                 batch_emails = 0
                 batch_phones = 0
@@ -592,91 +606,125 @@ class EmailScraperValidator:
                 batch_success = 0
                 batch_failed = 0
                 
-                for row in batch:
-                    try:
-                        # Send heartbeat every 30 seconds
-                        if time.time() - last_heartbeat > 30:
-                            elapsed = time.time() - stats['start_time']
-                            rate = stats['total_processed'] / (elapsed / 60) if elapsed > 60 else 0
-                            db_writer.server_heartbeat(
-                                server_id, 
-                                current_task=f"Processing {stats['total_processed']}/{target_count}",
-                                urls_per_minute=rate
-                            )
-                            last_heartbeat = time.time()
-                        
-                        url = row.get('url', '')
-                        link = row.get('link', '')
-                        
-                        if not url:
-                            self.logger.debug(f"[{server_id}] Row {row.get('result_id')} has no URL, skipping")
-                            continue
-                        
-                        # Use existing scraper to process URL
-                        scrape_result = self.csv_processor.process_single_url(row)
-                        
-                        # Prepare result for database (use 'link' as UPSERT key)
-                        # Include original data from results table for proper field mapping
-                        result = {
-                            # UPSERT key and source tracking
-                            'link': link,  # Google Maps link as UPSERT key
-                            'result_id': row.get('result_id'),  # For source_id column
+                # Thread-safe lock for updating shared stats
+                stats_lock = threading.Lock()
+                
+                def process_row(row):
+                    """Process a single row - called in parallel by ThreadPoolExecutor."""
+                    url = row.get('url', '')
+                    link = row.get('link', '')
+                    
+                    if not url:
+                        self.logger.debug(f"[{server_id}] Row {row.get('result_id')} has no URL, skipping")
+                        return None
+                    
+                    # Use existing scraper to process URL
+                    scrape_result = self.csv_processor.process_single_url(row)
+                    
+                    # Prepare result for database
+                    return {
+                        # UPSERT key and source tracking
+                        'link': link,
+                        'result_id': row.get('result_id'),
+                        # Original data from results table
+                        'name': row.get('name', ''),
+                        'category': row.get('category', ''),
+                        'country': row.get('country', ''),
+                        'original_data': row.get('original_data', {}),
+                        # Scraped data
+                        'emails': '; '.join(scrape_result.get('emails', [])),
+                        'phones': '; '.join(scrape_result.get('phones', [])),
+                        'whatsapp': '; '.join(scrape_result.get('whatsapp', [])),
+                        'facebook': scrape_result.get('facebook', ''),
+                        'instagram': scrape_result.get('instagram', ''),
+                        'linkedin': scrape_result.get('linkedin', ''),
+                        'tiktok': scrape_result.get('tiktok', ''),
+                        'youtube': scrape_result.get('youtube', ''),
+                        # Scraping metadata
+                        'final_url': scrape_result.get('final_url', url),
+                        'was_redirected': scrape_result.get('was_redirected', False),
+                        'status': scrape_result.get('status', 'unknown'),
+                        'error': scrape_result.get('error', ''),
+                        'processing_time': scrape_result.get('processing_time', 0),
+                        'pages_scraped': scrape_result.get('pages_scraped', 0),
+                        # Raw scrape result for stats calculation
+                        '_scrape_result': scrape_result,
+                    }
+                
+                # Use ThreadPoolExecutor for PARALLEL processing
+                max_workers = self.config.get('max_workers', 6)
+                with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                    # Submit all rows in batch for parallel processing
+                    future_to_row = {
+                        executor.submit(process_row, row): row
+                        for row in batch
+                    }
+                    
+                    # Collect results as they complete
+                    for future in as_completed(future_to_row):
+                        row = future_to_row[future]
+                        try:
+                            result = future.result()
                             
-                            # Original data from results table
-                            'name': row.get('name', ''),
-                            'category': row.get('category', ''),  # For business_category
-                            'country': row.get('country', ''),  # For country_code
-                            'original_data': row.get('original_data', {}),  # Full GMaps data
+                            if result is None:
+                                continue
                             
-                            # Scraped data (extracted from website)
-                            'emails': '; '.join(scrape_result.get('emails', [])),
-                            'phones': '; '.join(scrape_result.get('phones', [])),
-                            'whatsapp': '; '.join(scrape_result.get('whatsapp', [])),
-                            'facebook': scrape_result.get('facebook', ''),
-                            'instagram': scrape_result.get('instagram', ''),
-                            'linkedin': scrape_result.get('linkedin', ''),
-                            'tiktok': scrape_result.get('tiktok', ''),
-                            'youtube': scrape_result.get('youtube', ''),
+                            # Extract scrape result for stats
+                            scrape_result = result.pop('_scrape_result', {})
+                            results.append(result)
                             
-                            # Scraping metadata
-                            'final_url': scrape_result.get('final_url', url),
-                            'was_redirected': scrape_result.get('was_redirected', False),
-                            'status': scrape_result.get('status', 'unknown'),
-                            'error': scrape_result.get('error', ''),
-                            'processing_time': scrape_result.get('processing_time', 0),
-                            'pages_scraped': scrape_result.get('pages_scraped', 0),
-                        }
-                        results.append(result)
-                        
-                        # Update stats
-                        stats['total_processed'] += 1
-                        emails_found = len(scrape_result.get('emails', []))
-                        phones_found = len(scrape_result.get('phones', []))
-                        whatsapp_found = len(scrape_result.get('whatsapp', []))
-                        
-                        if scrape_result.get('status') == 'success':
-                            stats['successful'] += 1
-                            batch_success += 1
-                        else:
-                            stats['failed'] += 1
-                            batch_failed += 1
-                        
-                        stats['total_emails'] += emails_found
-                        stats['total_phones'] += phones_found
-                        stats['total_whatsapp'] += whatsapp_found
-                        batch_emails += emails_found
-                        batch_phones += phones_found
-                        batch_whatsapp += whatsapp_found
-                        
-                    except Exception as e:
-                        self.logger.warning(f"[{server_id}] Error processing row {row.get('result_id')}: {e}")
-                        stats['failed'] += 1
-                        batch_failed += 1
+                            # Update stats (thread-safe)
+                            with stats_lock:
+                                stats['total_processed'] += 1
+                                emails_found = len(scrape_result.get('emails', []))
+                                phones_found = len(scrape_result.get('phones', []))
+                                whatsapp_found = len(scrape_result.get('whatsapp', []))
+                                
+                                if scrape_result.get('status') == 'success':
+                                    stats['successful'] += 1
+                                    batch_success += 1
+                                else:
+                                    stats['failed'] += 1
+                                    batch_failed += 1
+                                
+                                stats['total_emails'] += emails_found
+                                stats['total_phones'] += phones_found
+                                stats['total_whatsapp'] += whatsapp_found
+                                batch_emails += emails_found
+                                batch_phones += phones_found
+                                batch_whatsapp += whatsapp_found
+                            
+                            # Update progress bar per completed URL
+                            pbar.update(1)
+                            
+                        except Exception as e:
+                            self.logger.warning(f"[{server_id}] Error processing row {row.get('result_id')}: {e}")
+                            with stats_lock:
+                                stats['failed'] += 1
+                                batch_failed += 1
+                            pbar.update(1)
+                
+                # Send heartbeat after batch completes
+                if time.time() - last_heartbeat > 30:
+                    elapsed = time.time() - stats['start_time']
+                    rate = stats['total_processed'] / (elapsed / 60) if elapsed > 60 else 0
+                    db_writer.server_heartbeat(
+                        server_id, 
+                        current_task=f"Processing {stats['total_processed']}/{target_count}",
+                        urls_per_minute=rate
+                    )
+                    last_heartbeat = time.time()
                 
                 # Batch write to database
                 if results:
                     written = db_writer.upsert_batch(results, server_id)
-                    self.logger.debug(f"[{server_id}] Wrote {written} rows to database")
+                    stats['total_written'] += written
+                    
+                    # Log discrepancy if not all results were written
+                    if written != len(results):
+                        self.logger.warning(f"[{server_id}] DB write mismatch: {len(results)} results, {written} written")
+                    
+                    self.logger.info(f"[{server_id}] Batch: {len(batch)} claimed, {len(results)} processed, {written} written to DB")
                     
                     # Update server stats after each batch
                     db_writer.update_server_stats(
@@ -692,9 +740,6 @@ class EmailScraperValidator:
                 # Release locks for processed batch
                 result_ids = [r.get('result_id') for r in batch if r.get('result_id')]
                 source_reader.release_locks(result_ids)
-                
-                # Update progress bar
-                pbar.update(len(batch))
                 
                 # Log progress every 10 batches
                 if stats['total_processed'] % (batch_size * 10) == 0:
@@ -726,7 +771,8 @@ class EmailScraperValidator:
         stats['success_rate'] = (stats['successful'] / stats['total_processed'] * 100) if stats['total_processed'] > 0 else 0
         
         self.logger.info(f"[{server_id}] === DSN Mode Completed ===")
-        self.logger.info(f"[{server_id}] Processed: {stats['total_processed']:,} | Success: {stats['successful']:,} | Failed: {stats['failed']:,}")
+        self.logger.info(f"[{server_id}] Processed: {stats['total_processed']:,} | Written to DB: {stats['total_written']:,} | Unique IDs claimed: {len(all_claimed_ids):,}")
+        self.logger.info(f"[{server_id}] Success: {stats['successful']:,} | Failed: {stats['failed']:,}")
         self.logger.info(f"[{server_id}] Rate: {stats['rate_per_minute']:.1f}/min | Duration: {elapsed/60:.1f} min")
         self.logger.info(f"[{server_id}] Emails: {stats['total_emails']:,} | Phones: {stats['total_phones']:,} | WhatsApp: {stats['total_whatsapp']:,}")
         

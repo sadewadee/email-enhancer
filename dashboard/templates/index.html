@@ -3,13 +3,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Zenvoyer Dashboard</title>
+    <title>InsightHub Dashboard</title>
     <link rel="stylesheet" href="/static/css/style.css">
 </head>
 <body>
     <div class="container">
         <header>
-            <h1>Zenvoyer Dashboard</h1>
+            <h1>InsightHub Dashboard</h1>
             <div class="header-actions">
                 <span id="last-updated">Loading...</span>
                 <button onclick="refreshData()" class="btn btn-primary">↻ Refresh</button>
@@ -50,7 +50,7 @@
         </section>
 
         <!-- Contact Stats -->
-        <section class="stats-grid" id="contact-stats">
+        <section class="stats-grid stats-grid-5" id="contact-stats">
             <div class="stat-card">
                 <h3>Emails Found</h3>
                 <div class="stat-value" id="total-emails">-</div>
@@ -67,9 +67,14 @@
                 <div class="stat-label" id="rows-with-whatsapp">- rows</div>
             </div>
             <div class="stat-card">
-                <h3>Activity</h3>
+                <h3>Social Media</h3>
+                <div class="stat-value" id="total-social">-</div>
+                <div class="stat-label" id="rows-with-social">- rows</div>
+            </div>
+            <div class="stat-card">
+                <h3>Last 24h</h3>
                 <div class="stat-value" id="processed-24h">-</div>
-                <div class="stat-label">last 24h</div>
+                <div class="stat-label" id="processed-1h">- last hour</div>
             </div>
         </section>
 

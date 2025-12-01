@@ -1,5 +1,5 @@
 """
-Database Source Reader for Zenvoyer Schema
+Database Source Reader for InsightHub Schema
 
 Reads from results table and checks completion against zen_contacts.
 Optimized for multi-server concurrent processing with transaction-level advisory locks.
@@ -35,23 +35,23 @@ class DBSourceConfig:
 class DBSourceReader:
     """
     Reads from results table with advisory locks for multi-server concurrency.
-    
+
     Checks completion against zen_contacts (partitioned table).
     Uses partition key calculation for efficient lookups.
     """
-    
+
     def __init__(self, config: DBSourceConfig, server_id: str, logger: logging.Logger):
         self.config = config
         self.server_id = server_id
         self.logger = logger
         self.pool: Optional[pool.ThreadedConnectionPool] = None
         self._claimed_ids: List[int] = []
-    
+
     def connect(self) -> bool:
         """Initialize connection pool."""
         try:
             self.logger.info(f"[{self.server_id}] Connecting to PostgreSQL...")
-            
+
             self.pool = pool.ThreadedConnectionPool(
                 minconn=self.config.min_connections,
                 maxconn=self.config.max_connections,
@@ -64,7 +64,7 @@ class DBSourceReader:
                 options=f'-c statement_timeout={self.config.statement_timeout}',
                 client_encoding='UTF8'
             )
-            
+
             # Test connection
             conn = self.pool.getconn()
             try:
@@ -73,13 +73,13 @@ class DBSourceReader:
                 self.logger.info(f"[{self.server_id}] Connection successful")
             finally:
                 self.pool.putconn(conn)
-            
+
             return True
-            
+
         except Exception as e:
             self.logger.error(f"[{self.server_id}] Connection failed: {e}")
             return False
-    
+
     def close(self):
         """Close connections and release locks."""
         if self._claimed_ids:
@@ -87,18 +87,20 @@ class DBSourceReader:
         if self.pool:
             self.pool.closeall()
             self.logger.info(f"[{self.server_id}] Connection closed")
-    
-    def claim_batch(self, batch_size: int = 100, country_filter: str = None) -> List[Dict[str, Any]]:
+
+    def claim_batch(self, batch_size: int = 100, country_filter: str = None, exclude_ids: set = None) -> List[Dict[str, Any]]:
         """
-        Claim batch of unprocessed rows using transaction-level advisory locks.
-        
-        Uses pg_try_advisory_xact_lock which auto-releases on commit/rollback.
-        For safe processing with guaranteed lock release, use claim_batch_safe().
-        
+        Claim batch of unprocessed rows.
+
+        IMPORTANT: Advisory locks (pg_try_advisory_xact_lock) are released when connection
+        returns to pool. To prevent re-claiming same rows, use exclude_ids parameter
+        to pass IDs that have already been claimed in this session.
+
         Args:
             batch_size: Number of rows to claim
             country_filter: Optional ISO country code to filter (e.g., 'US', 'ID')
-            
+            exclude_ids: Set of result IDs to exclude (already claimed in this session)
+
         Returns:
             List of parsed row dictionaries
         """
@@ -107,23 +109,33 @@ class DBSourceReader:
         if country_filter:
             country_filter = country_filter.upper()[:2]
             country_clause = f"AND (r.data->'complete_address'->>'country')::VARCHAR(2) = '{country_filter}'"
-        
+
+        # Build exclude clause to prevent re-claiming same rows
+        exclude_clause = ""
+        if exclude_ids and len(exclude_ids) > 0:
+            # Convert set to tuple for SQL IN clause
+            exclude_list = tuple(exclude_ids)
+            if len(exclude_list) == 1:
+                exclude_clause = f"AND r.id != {exclude_list[0]}"
+            else:
+                exclude_clause = f"AND r.id NOT IN {exclude_list}"
+
         query = f"""
         SELECT r.id, r.data
         FROM results r
         WHERE NOT EXISTS (
-            SELECT 1 FROM zen_contacts sc 
+            SELECT 1 FROM zen_contacts sc
             WHERE sc.source_link = r.data->>'link'
             AND sc.partition_key = MOD(ABS(hashtext(r.data->>'link')), 32)
         )
         AND r.data->>'web_site' IS NOT NULL
         AND r.data->>'web_site' != ''
         {country_clause}
-        AND pg_try_advisory_xact_lock(r.id)
+        {exclude_clause}
         ORDER BY r.id
         LIMIT %s;
         """
-        
+
         conn = self.pool.getconn()
         try:
             cursor = conn.cursor()
@@ -132,11 +144,11 @@ class DBSourceReader:
             self.logger.info(f"[{self.server_id}] Query executed, fetching rows...")
             rows = cursor.fetchall()
             self.logger.info(f"[{self.server_id}] Fetched {len(rows)} rows")
-            
+
             # Debug: show first row structure
             if rows:
                 self.logger.info(f"[{self.server_id}] First row type: {type(rows[0])}, len: {len(rows[0]) if hasattr(rows[0], '__len__') else 'N/A'}")
-            
+
             claimed = []
             for row in rows:
                 try:
@@ -151,14 +163,14 @@ class DBSourceReader:
                     row_id = row[0] if row and len(row) > 0 else 'unknown'
                     self.logger.warning(f"[{self.server_id}] Parse error for row {row_id}: {e}")
                     # No manual release needed - xact locks auto-release
-            
+
             # Don't commit - keep transaction open to hold locks
-            
+
             if claimed:
                 self.logger.info(f"[{self.server_id}] Claimed {len(claimed)} rows")
-            
+
             return claimed
-            
+
         except Exception as e:
             import traceback
             self.logger.error(f"[{self.server_id}] Claim error: {e}")
@@ -168,25 +180,25 @@ class DBSourceReader:
             return []
         finally:
             self.pool.putconn(conn)
-    
+
     @contextmanager
     def claim_batch_safe(self, batch_size: int = 100, country_filter: str = None) -> Generator[List[Dict[str, Any]], None, None]:
         """
         Context manager for safely claiming and processing a batch.
-        
+
         Locks are held for the duration of the 'with' block and automatically
         released on exit (commit on success, rollback on exception).
-        
+
         Usage:
             with reader.claim_batch_safe(100, 'ID') as rows:
                 for row in rows:
                     process(row)
             # Locks automatically released here
-        
+
         Args:
             batch_size: Number of rows to claim
             country_filter: Optional ISO country code
-            
+
         Yields:
             List of parsed row dictionaries
         """
@@ -194,12 +206,12 @@ class DBSourceReader:
         if country_filter:
             country_filter = country_filter.upper()[:2]
             country_clause = f"AND (r.data->'complete_address'->>'country')::VARCHAR(2) = '{country_filter}'"
-        
+
         query = f"""
         SELECT r.id, r.data
         FROM results r
         WHERE NOT EXISTS (
-            SELECT 1 FROM zen_contacts sc 
+            SELECT 1 FROM zen_contacts sc
             WHERE sc.source_link = r.data->>'link'
             AND sc.partition_key = MOD(ABS(hashtext(r.data->>'link')), 32)
         )
@@ -210,14 +222,14 @@ class DBSourceReader:
         ORDER BY r.id
         LIMIT %s;
         """
-        
+
         conn = self.pool.getconn()
         claimed = []
         try:
             cursor = conn.cursor()
             cursor.execute(query, (batch_size,))
             rows = cursor.fetchall()
-            
+
             for row in rows:
                 try:
                     parsed = self._parse_row(row)
@@ -225,26 +237,26 @@ class DBSourceReader:
                         claimed.append(parsed)
                 except Exception as e:
                     self.logger.warning(f"[{self.server_id}] Parse error for row {row[0]}: {e}")
-            
+
             if claimed:
                 self.logger.info(f"[{self.server_id}] Claimed {len(claimed)} rows (holding locks)")
-            
+
             yield claimed  # Process while locks held
-            
+
             conn.commit()  # Release locks on success
             self.logger.debug(f"[{self.server_id}] Released {len(claimed)} locks (commit)")
-            
+
         except Exception as e:
             self.logger.error(f"[{self.server_id}] Error in claim_batch_safe: {e}")
             conn.rollback()  # Release locks on error
             raise
         finally:
             self.pool.putconn(conn)
-    
+
     def release_locks(self, result_ids: List[int] = None):
         """
         Release advisory locks.
-        
+
         DEPRECATED: With pg_try_advisory_xact_lock, locks auto-release on commit/rollback.
         This method is kept for backward compatibility but is now a no-op.
         """
@@ -253,31 +265,31 @@ class DBSourceReader:
             self._claimed_ids = [x for x in self._claimed_ids if x not in result_ids]
         else:
             self._claimed_ids = []
-        
+
         self.logger.debug(f"[{self.server_id}] release_locks called (no-op with xact locks)")
-    
+
     def _parse_row(self, row: tuple) -> Optional[Dict[str, Any]]:
         """Parse results row into dictionary."""
         result_id, data = row
-        
+
         if isinstance(data, str):
             try:
                 data = json.loads(data)
             except json.JSONDecodeError:
                 return None
-        
+
         web_site = data.get('web_site', '') or ''
         if not web_site.strip():
             return None
-        
+
         link = data.get('link', '') or ''
         if not link.strip():
             return None
-        
+
         # Extract country
         complete_address = data.get('complete_address', {}) or {}
         country = complete_address.get('country', '') or ''
-        
+
         return {
             'result_id': result_id,
             'url': web_site.strip(),
@@ -293,18 +305,18 @@ class DBSourceReader:
             'review_rating': data.get('review_rating'),
             'original_data': data,
         }
-    
+
     def get_pending_count(self, country_filter: str = None) -> int:
         """Count pending rows."""
         country_clause = ""
         if country_filter:
             country_filter = country_filter.upper()[:2]
             country_clause = f"AND (r.data->'complete_address'->>'country')::VARCHAR(2) = '{country_filter}'"
-        
+
         query = f"""
         SELECT COUNT(*) FROM results r
         WHERE NOT EXISTS (
-            SELECT 1 FROM zen_contacts sc 
+            SELECT 1 FROM zen_contacts sc
             WHERE sc.source_link = r.data->>'link'
             AND sc.partition_key = MOD(ABS(hashtext(r.data->>'link')), 32)
         )
@@ -312,7 +324,7 @@ class DBSourceReader:
         AND r.data->>'web_site' != ''
         {country_clause};
         """
-        
+
         conn = self.pool.getconn()
         try:
             cursor = conn.cursor()
@@ -323,7 +335,7 @@ class DBSourceReader:
             return -1
         finally:
             self.pool.putconn(conn)
-    
+
     def get_total_count(self) -> int:
         """Get total rows in results."""
         conn = self.pool.getconn()
@@ -336,18 +348,18 @@ class DBSourceReader:
             return -1
         finally:
             self.pool.putconn(conn)
-    
+
     def get_completed_count(self) -> int:
         """Count completed rows (exist in zen_contacts)."""
         query = """
         SELECT COUNT(*) FROM results r
         WHERE EXISTS (
-            SELECT 1 FROM zen_contacts sc 
+            SELECT 1 FROM zen_contacts sc
             WHERE sc.source_link = r.data->>'link'
             AND sc.partition_key = MOD(ABS(hashtext(r.data->>'link')), 32)
         );
         """
-        
+
         conn = self.pool.getconn()
         try:
             cursor = conn.cursor()
@@ -358,16 +370,16 @@ class DBSourceReader:
             return -1
         finally:
             self.pool.putconn(conn)
-    
+
     def get_country_pending_counts(self) -> Dict[str, int]:
         """Get pending count per country."""
         query = """
-        SELECT 
+        SELECT
             UPPER(LEFT(COALESCE(r.data->'complete_address'->>'country', 'XX'), 2)) as country,
             COUNT(*) as pending
         FROM results r
         WHERE NOT EXISTS (
-            SELECT 1 FROM zen_contacts sc 
+            SELECT 1 FROM zen_contacts sc
             WHERE sc.source_link = r.data->>'link'
             AND sc.partition_key = MOD(ABS(hashtext(r.data->>'link')), 32)
         )
@@ -376,7 +388,7 @@ class DBSourceReader:
         GROUP BY 1
         ORDER BY pending DESC;
         """
-        
+
         conn = self.pool.getconn()
         try:
             cursor = conn.cursor()
@@ -394,9 +406,9 @@ def create_db_source_reader(server_id: str, logger: logging.Logger) -> Optional[
     try:
         from dotenv import load_dotenv
         import os
-        
+
         load_dotenv()
-        
+
         config = DBSourceConfig(
             host=os.getenv('DB_HOST', 'localhost'),
             port=int(os.getenv('DB_PORT', '5432')),
@@ -408,13 +420,13 @@ def create_db_source_reader(server_id: str, logger: logging.Logger) -> Optional[
             connect_timeout=int(os.getenv('DB_CONNECT_TIMEOUT', '10')),
             statement_timeout=int(os.getenv('DB_STATEMENT_TIMEOUT', '60000')),
         )
-        
+
         if not config.password:
             logger.error("DB_PASSWORD not set")
             return None
-        
+
         return DBSourceReader(config, server_id, logger)
-        
+
     except Exception as e:
         logger.error(f"Error creating reader: {e}")
         return None

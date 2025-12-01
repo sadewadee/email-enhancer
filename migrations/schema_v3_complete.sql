@@ -1,8 +1,8 @@
 -- ============================================================================
--- ZENVOYER ENRICHMENT DATABASE SCHEMA v3
+-- InsightHub ENRICHMENT DATABASE SCHEMA v3
 -- ============================================================================
 -- Complete schema untuk multi-country scraping dengan monitoring dashboard
--- 
+--
 -- Tables:
 --   zen_contacts        - Main enriched contacts data (partitioned)
 --   zen_servers         - Server registry untuk monitoring
@@ -29,16 +29,16 @@ CREATE TABLE zen_contacts (
     -- ========== IDENTITY ==========
     id BIGSERIAL,
     partition_key INTEGER NOT NULL DEFAULT 0,
-    
+
     -- ========== SOURCE REFERENCE ==========
     source_id INTEGER,                        -- results.id
     source_link VARCHAR(2048) NOT NULL,       -- Google Maps URL (UPSERT key)
-    
+
     -- ========== BUSINESS INFO ==========
     business_name VARCHAR(500),
     business_category VARCHAR(255),
     business_website VARCHAR(2048),
-    
+
     -- ========== LOCATION ==========
     country_code VARCHAR(2) NOT NULL DEFAULT 'XX',  -- ISO 3166-1 alpha-2
     country_name VARCHAR(100),
@@ -49,7 +49,7 @@ CREATE TABLE zen_contacts (
     latitude NUMERIC(10, 8),
     longitude NUMERIC(11, 8),
     timezone VARCHAR(100),
-    
+
     -- ========== GOOGLE MAPS DATA ==========
     gmaps_phone VARCHAR(100),
     gmaps_rating NUMERIC(3, 2),
@@ -57,24 +57,24 @@ CREATE TABLE zen_contacts (
     gmaps_price_range VARCHAR(50),
     gmaps_cid VARCHAR(255),
     gmaps_status VARCHAR(50),
-    
+
     -- ========== ENRICHED: EMAILS ==========
     emails TEXT[],
     emails_count INTEGER DEFAULT 0,
     emails_validated JSONB,                   -- Validation results
     has_email BOOLEAN GENERATED ALWAYS AS (emails_count > 0) STORED,
-    
+
     -- ========== ENRICHED: PHONES ==========
     phones TEXT[],
     phones_count INTEGER DEFAULT 0,
     has_phone BOOLEAN GENERATED ALWAYS AS (phones_count > 0) STORED,
-    
+
     -- ========== ENRICHED: WHATSAPP ==========
     whatsapp TEXT[],
     whatsapp_count INTEGER DEFAULT 0,
     whatsapp_validated JSONB,
     has_whatsapp BOOLEAN GENERATED ALWAYS AS (whatsapp_count > 0) STORED,
-    
+
     -- ========== ENRICHED: SOCIAL MEDIA ==========
     social_facebook VARCHAR(500),
     social_instagram VARCHAR(500),
@@ -83,7 +83,7 @@ CREATE TABLE zen_contacts (
     social_youtube VARCHAR(500),
     social_twitter VARCHAR(500),
     social_count INTEGER DEFAULT 0,
-    
+
     -- ========== SCRAPING METADATA ==========
     scrape_status VARCHAR(20) DEFAULT 'pending',  -- pending, success, failed, skipped
     scrape_error TEXT,
@@ -91,18 +91,18 @@ CREATE TABLE zen_contacts (
     scrape_was_redirected BOOLEAN DEFAULT FALSE,
     scrape_time_seconds NUMERIC(10, 3),
     scrape_pages_count INTEGER DEFAULT 0,
-    
+
     -- ========== AUDIT ==========
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW(),
     scrape_count INTEGER DEFAULT 0,
     last_scrape_server VARCHAR(50),
     last_scrape_at TIMESTAMPTZ,
-    
+
     -- ========== CONSTRAINTS ==========
     PRIMARY KEY (id, partition_key),
     UNIQUE (source_link, partition_key)
-    
+
 ) PARTITION BY HASH (partition_key);
 
 -- Create 32 partitions
@@ -156,15 +156,15 @@ CREATE TABLE zen_servers (
     server_ip VARCHAR(45),
     server_hostname VARCHAR(255),
     server_region VARCHAR(50),               -- 'sg', 'id', 'us', etc.
-    
+
     -- ========== CONFIGURATION ==========
     workers_count INTEGER DEFAULT 6,
     batch_size INTEGER DEFAULT 100,
-    
+
     -- ========== STATUS ==========
     status VARCHAR(20) DEFAULT 'offline',    -- online, offline, paused, error
     current_task VARCHAR(255),               -- What it's currently doing
-    
+
     -- ========== STATISTICS ==========
     total_processed BIGINT DEFAULT 0,
     total_success BIGINT DEFAULT 0,
@@ -172,18 +172,18 @@ CREATE TABLE zen_servers (
     total_emails_found BIGINT DEFAULT 0,
     total_phones_found BIGINT DEFAULT 0,
     total_whatsapp_found BIGINT DEFAULT 0,
-    
+
     -- ========== PERFORMANCE ==========
     avg_time_per_url NUMERIC(10, 3),         -- Average seconds per URL
     urls_per_minute NUMERIC(10, 2),          -- Current rate
     success_rate NUMERIC(5, 2),              -- Success percentage
-    
+
     -- ========== TIMESTAMPS ==========
     started_at TIMESTAMPTZ,
     last_heartbeat TIMESTAMPTZ,
     last_activity TIMESTAMPTZ,
     created_at TIMESTAMPTZ DEFAULT NOW(),
-    
+
     -- ========== SESSION INFO ==========
     session_id VARCHAR(100),                 -- Unique per run
     session_started TIMESTAMPTZ,
@@ -206,17 +206,17 @@ CREATE TABLE zen_jobs (
     -- ========== IDENTITY ==========
     id BIGSERIAL PRIMARY KEY,
     job_id VARCHAR(100) UNIQUE,              -- UUID or custom ID
-    
+
     -- ========== JOB INFO ==========
     server_id VARCHAR(50) REFERENCES zen_servers(server_id),
     job_type VARCHAR(50),                    -- 'dsn_batch', 'csv_import', 'rescrape'
     job_status VARCHAR(20) DEFAULT 'running', -- running, completed, failed, cancelled
-    
+
     -- ========== SCOPE ==========
     country_filter VARCHAR(2),               -- NULL = all countries
     category_filter VARCHAR(255),
     batch_size INTEGER,
-    
+
     -- ========== PROGRESS ==========
     total_rows INTEGER DEFAULT 0,
     processed_rows INTEGER DEFAULT 0,
@@ -226,18 +226,18 @@ CREATE TABLE zen_jobs (
     progress_percent NUMERIC(5, 2) GENERATED ALWAYS AS (
         CASE WHEN total_rows > 0 THEN (processed_rows::NUMERIC / total_rows * 100) ELSE 0 END
     ) STORED,
-    
+
     -- ========== RESULTS ==========
     emails_found INTEGER DEFAULT 0,
     phones_found INTEGER DEFAULT 0,
     whatsapp_found INTEGER DEFAULT 0,
-    
+
     -- ========== TIMING ==========
     started_at TIMESTAMPTZ DEFAULT NOW(),
     completed_at TIMESTAMPTZ,
     duration_seconds INTEGER,
     avg_time_per_row NUMERIC(10, 3),
-    
+
     -- ========== ERROR TRACKING ==========
     last_error TEXT,
     error_count INTEGER DEFAULT 0
@@ -260,21 +260,21 @@ CREATE TABLE zen_stats_hourly (
     id BIGSERIAL PRIMARY KEY,
     stat_hour TIMESTAMPTZ NOT NULL,          -- Truncated to hour
     country_code VARCHAR(2) DEFAULT 'ALL',   -- 'ALL' for global stats
-    
+
     -- ========== COUNTS ==========
     rows_processed INTEGER DEFAULT 0,
     rows_success INTEGER DEFAULT 0,
     rows_failed INTEGER DEFAULT 0,
-    
+
     -- ========== CONTACT STATS ==========
     emails_found INTEGER DEFAULT 0,
     phones_found INTEGER DEFAULT 0,
     whatsapp_found INTEGER DEFAULT 0,
-    
+
     -- ========== PERFORMANCE ==========
     avg_time_seconds NUMERIC(10, 3),
     total_time_seconds NUMERIC(12, 3),
-    
+
     -- ========== UNIQUE CONSTRAINT ==========
     UNIQUE(stat_hour, country_code)
 );
@@ -295,33 +295,33 @@ SELECT
     (SELECT COUNT(*) FROM zen_contacts WHERE scrape_status = 'success') AS enriched_success,
     (SELECT COUNT(*) FROM zen_contacts WHERE scrape_status = 'failed') AS enriched_failed,
     (SELECT COUNT(*) FROM zen_contacts WHERE scrape_status = 'pending') AS enriched_pending,
-    
+
     -- Pending calculation
     (SELECT COUNT(*) FROM results r WHERE NOT EXISTS (
         SELECT 1 FROM zen_contacts zc WHERE zc.source_link = r.data->>'link'
     )) AS pending_total,
-    
+
     -- Contact totals
     (SELECT COALESCE(SUM(emails_count), 0) FROM zen_contacts) AS total_emails,
     (SELECT COALESCE(SUM(phones_count), 0) FROM zen_contacts) AS total_phones,
     (SELECT COALESCE(SUM(whatsapp_count), 0) FROM zen_contacts) AS total_whatsapp,
-    
+
     -- Unique counts
     (SELECT COUNT(*) FROM zen_contacts WHERE has_email) AS rows_with_email,
     (SELECT COUNT(*) FROM zen_contacts WHERE has_phone) AS rows_with_phone,
     (SELECT COUNT(*) FROM zen_contacts WHERE has_whatsapp) AS rows_with_whatsapp,
-    
+
     -- Country stats
     (SELECT COUNT(DISTINCT country_code) FROM zen_contacts) AS countries_processed,
-    
+
     -- Server stats
     (SELECT COUNT(*) FROM zen_servers WHERE status = 'online') AS servers_online,
     (SELECT COUNT(*) FROM zen_servers) AS servers_total,
-    
+
     -- Recent activity (last 24h)
     (SELECT COUNT(*) FROM zen_contacts WHERE updated_at > NOW() - INTERVAL '24 hours') AS processed_24h,
     (SELECT COUNT(*) FROM zen_contacts WHERE updated_at > NOW() - INTERVAL '1 hour') AS processed_1h,
-    
+
     -- Timestamp
     NOW() AS generated_at;
 
@@ -338,17 +338,17 @@ SELECT
     s.status,
     s.workers_count,
     s.current_task,
-    
+
     -- Health check
-    CASE 
+    CASE
         WHEN s.last_heartbeat > NOW() - INTERVAL '2 minutes' THEN 'healthy'
         WHEN s.last_heartbeat > NOW() - INTERVAL '5 minutes' THEN 'warning'
         ELSE 'critical'
     END AS health,
-    
+
     -- Time since last heartbeat
     EXTRACT(EPOCH FROM (NOW() - s.last_heartbeat))::INTEGER AS seconds_since_heartbeat,
-    
+
     -- Statistics
     s.total_processed,
     s.total_success,
@@ -356,24 +356,24 @@ SELECT
     s.success_rate,
     s.urls_per_minute,
     s.avg_time_per_url,
-    
+
     -- Session info
     s.session_processed,
     s.session_errors,
     EXTRACT(EPOCH FROM (NOW() - s.session_started))::INTEGER AS session_duration_seconds,
-    
+
     -- Timestamps
     s.last_heartbeat,
     s.last_activity,
     s.started_at
-    
+
 FROM zen_servers s
-ORDER BY 
-    CASE s.status 
-        WHEN 'online' THEN 1 
-        WHEN 'paused' THEN 2 
-        WHEN 'error' THEN 3 
-        ELSE 4 
+ORDER BY
+    CASE s.status
+        WHEN 'online' THEN 1
+        WHEN 'paused' THEN 2
+        WHEN 'error' THEN 3
+        ELSE 4
     END,
     s.last_heartbeat DESC NULLS LAST;
 
@@ -384,7 +384,7 @@ ORDER BY
 
 CREATE OR REPLACE VIEW zen_v_country_progress AS
 WITH source_counts AS (
-    SELECT 
+    SELECT
         UPPER(LEFT(COALESCE(r.data->'complete_address'->>'country', 'XX'), 2)) AS country_code,
         COUNT(*) AS source_count
     FROM results r
@@ -411,10 +411,10 @@ SELECT
     COALESCE(s.source_count, 0) AS source_total,
     COALESCE(e.enriched_count, 0) AS enriched_total,
     COALESCE(s.source_count, 0) - COALESCE(e.enriched_count, 0) AS pending,
-    CASE 
-        WHEN COALESCE(s.source_count, 0) > 0 
+    CASE
+        WHEN COALESCE(s.source_count, 0) > 0
         THEN ROUND((COALESCE(e.enriched_count, 0)::NUMERIC / s.source_count * 100), 1)
-        ELSE 0 
+        ELSE 0
     END AS progress_percent,
     COALESCE(e.success_count, 0) AS success_count,
     COALESCE(e.failed_count, 0) AS failed_count,
@@ -556,7 +556,7 @@ DECLARE
     v_session_id VARCHAR(100);
 BEGIN
     v_session_id := p_server_id || '_' || to_char(NOW(), 'YYYYMMDD_HH24MISS');
-    
+
     INSERT INTO zen_servers (
         server_id, server_name, server_region, workers_count, batch_size,
         status, session_id, session_started, started_at, last_heartbeat
@@ -614,10 +614,10 @@ $$ LANGUAGE plpgsql;
 -- SELECT * FROM zen_v_hourly_stats LIMIT 168;  -- Last 7 days
 
 -- Get top countries by pending
--- SELECT country_code, pending, progress_percent 
--- FROM zen_v_country_progress 
--- WHERE pending > 0 
--- ORDER BY pending DESC 
+-- SELECT country_code, pending, progress_percent
+-- FROM zen_v_country_progress
+-- WHERE pending > 0
+-- ORDER BY pending DESC
 -- LIMIT 20;
 
 
@@ -628,15 +628,15 @@ $$ LANGUAGE plpgsql;
 SELECT 'Schema created successfully!' AS status;
 
 -- Show all tables
-SELECT table_name 
-FROM information_schema.tables 
-WHERE table_schema = 'public' 
+SELECT table_name
+FROM information_schema.tables
+WHERE table_schema = 'public'
 AND table_name LIKE 'zen_%'
 ORDER BY table_name;
 
 -- Show all views
 SELECT table_name AS view_name
-FROM information_schema.views 
-WHERE table_schema = 'public' 
+FROM information_schema.views
+WHERE table_schema = 'public'
 AND table_name LIKE 'zen_%'
 ORDER BY table_name;

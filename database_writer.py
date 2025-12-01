@@ -1,5 +1,5 @@
 """
-Database Writer for Zenvoyer Schema
+Database Writer for InsightHub Schema
 
 Writes to zen_contacts (partitioned table) with:
 - Hash partitioned table (32 partitions)
@@ -39,14 +39,14 @@ class DatabaseConfig:
 class DatabaseWriter:
     """
     Optimized database writer for partitioned schema.
-    
+
     Features:
     - Works with zen_contacts (hash partitioned)
     - Batch UPSERT with array merging
     - Automatic partition key calculation
     - Country code extraction
     """
-    
+
     # ISO 3166-1 alpha-2 country codes (165 countries)
     VALID_COUNTRIES = {
         'AF', 'AL', 'DZ', 'AD', 'AO', 'AR', 'AM', 'AU', 'AT', 'AZ',
@@ -68,19 +68,19 @@ class DatabaseWriter:
         'TR', 'TM', 'UG', 'UA', 'AE', 'GB', 'US', 'UY', 'UZ', 'VE',
         'VN', 'YE', 'ZM', 'ZW', 'XX'  # XX = unknown
     }
-    
+
     def __init__(self, config: DatabaseConfig, logger: logging.Logger):
         self.config = config
         self.logger = logger
         self.pool: Optional[pool.ThreadedConnectionPool] = None
         self.retry_count = 3
         self.retry_delay = 1.0
-    
+
     def connect(self) -> bool:
         """Initialize connection pool."""
         try:
             self.logger.info(f"Connecting to PostgreSQL: {self.config.host}:{self.config.port}/{self.config.database}")
-            
+
             self.pool = pool.ThreadedConnectionPool(
                 minconn=self.config.min_connections,
                 maxconn=self.config.max_connections,
@@ -93,7 +93,7 @@ class DatabaseWriter:
                 options=f'-c statement_timeout={self.config.statement_timeout}',
                 client_encoding='UTF8'
             )
-            
+
             # Test connection
             conn = self.pool.getconn()
             try:
@@ -103,19 +103,19 @@ class DatabaseWriter:
                 cursor.close()
             finally:
                 self.pool.putconn(conn)
-            
+
             return True
-            
+
         except Exception as e:
             self.logger.error(f"Failed to connect: {e}")
             return False
-    
+
     def close(self):
         """Close connection pool."""
         if self.pool:
             self.pool.closeall()
             self.logger.info("Connection pool closed")
-    
+
     def verify_schema(self) -> bool:
         """Verify zen_contacts table exists."""
         try:
@@ -129,12 +129,12 @@ class DatabaseWriter:
                     );
                 """)
                 exists = cursor.fetchone()[0]
-                
+
                 if not exists:
                     self.logger.error("Table 'zen_contacts' does not exist")
                     self.logger.error("Run migrations/schema_v3_complete.sql first")
                     return False
-                
+
                 self.logger.info("Schema validation passed (zen_contacts)")
                 return True
             finally:
@@ -142,31 +142,31 @@ class DatabaseWriter:
         except Exception as e:
             self.logger.error(f"Schema validation error: {e}")
             return False
-    
+
     def _get_partition_key(self, link: str) -> int:
         """Calculate partition key from link URL."""
         # Same algorithm as PostgreSQL function
         return abs(hash(link)) % 32
-    
+
     def _normalize_country(self, country: str) -> str:
         """Normalize and validate country code."""
         if not country:
             return 'XX'
-        
+
         country = country.upper().strip()[:2]
-        
+
         if country in self.VALID_COUNTRIES:
             return country
-        
+
         return 'XX'
-    
+
     def _extract_country(self, row_data: Dict[str, Any]) -> str:
         """Extract country from row data."""
         # Try direct country field
         country = row_data.get('country', '')
         if country:
             return self._normalize_country(country)
-        
+
         # Try original_data.complete_address.country
         original = row_data.get('original_data', {})
         if isinstance(original, dict):
@@ -175,12 +175,12 @@ class DatabaseWriter:
                 country = complete_addr.get('country', '')
                 if country:
                     return self._normalize_country(country)
-        
+
         return 'XX'
-    
+
     def _prepare_row(self, row_data: Dict[str, Any]) -> Dict[str, Any]:
         """Prepare row for database insertion."""
-        
+
         # Helper: Convert to array
         def to_array(value) -> List[str]:
             if not value:
@@ -192,17 +192,17 @@ class DatabaseWriter:
                     return [v.strip() for v in value.split(';') if v.strip()]
                 return [value.strip()] if value.strip() else []
             return []
-        
+
         # Get original GMaps data
         original = row_data.get('original_data', {}) or {}
-        
+
         # Extract primary fields
         link = row_data.get('link') or row_data.get('url', '')
         country = self._extract_country(row_data)
-        
+
         # Extract from original GMaps data
         complete_address = original.get('complete_address', {}) or {}
-        
+
         # Country name mapping (common ones)
         country_names = {
             'US': 'United States', 'GB': 'United Kingdom', 'CA': 'Canada',
@@ -218,19 +218,19 @@ class DatabaseWriter:
             'NZ': 'New Zealand', 'AR': 'Argentina', 'CL': 'Chile', 'CO': 'Colombia',
             'PE': 'Peru', 'PT': 'Portugal', 'IE': 'Ireland', 'IL': 'Israel',
         }
-        
+
         return {
             # Primary keys
             'link': link,
             'partition_key': self._get_partition_key(link),
-            
+
             # Business info (from original GMaps data)
             'country': country,
             'country_name': country_names.get(country, ''),
             'title': row_data.get('name') or original.get('title', ''),
             'category': row_data.get('category') or original.get('category', ''),
             'website': original.get('web_site') or original.get('domain', ''),
-            
+
             # Address fields (from original GMaps data)
             'city': complete_address.get('city', ''),
             'state': complete_address.get('state', ''),
@@ -241,7 +241,7 @@ class DatabaseWriter:
             'latitude': original.get('latitude'),
             'longitude': original.get('longtitude') or original.get('longitude'),
             'timezone': original.get('timezone', ''),
-            
+
             # GMaps metadata (all available fields)
             'gmaps_phone': original.get('phone', ''),
             'gmaps_rating': original.get('review_rating'),
@@ -254,10 +254,10 @@ class DatabaseWriter:
             'gmaps_plus_code': original.get('plus_code', ''),
             'gmaps_thumbnail': original.get('thumbnail', ''),
             'gmaps_featured_image': original.get('featured_image', ''),
-            
+
             # Source tracking
             'source_id': row_data.get('result_id'),
-            
+
             # Scraped contact data
             'emails': to_array(row_data.get('emails')),
             'phones': to_array(row_data.get('phones')),
@@ -266,7 +266,7 @@ class DatabaseWriter:
             'instagram': row_data.get('instagram') or None,
             'tiktok': row_data.get('tiktok') or None,
             'youtube': row_data.get('youtube') or None,
-            
+
             # Scraping metadata
             'final_url': row_data.get('final_url') or row_data.get('url', ''),
             'was_redirected': bool(row_data.get('was_redirected', False)),
@@ -275,21 +275,21 @@ class DatabaseWriter:
             'processing_time': float(row_data.get('processing_time', 0)),
             'pages_scraped': int(row_data.get('pages_scraped', 0)),
         }
-    
+
     def upsert_batch(self, rows: List[Dict[str, Any]], server_id: str = 'unknown') -> int:
         """
         Batch UPSERT to zen_contacts table.
-        
+
         Args:
             rows: List of row dictionaries
             server_id: Identifier of the server performing the upsert
-            
+
         Returns:
             Number of successfully upserted rows
         """
         if not rows:
             return 0
-        
+
         # Prepare all rows
         prepared = []
         for row in rows:
@@ -299,10 +299,10 @@ class DatabaseWriter:
                     prepared.append(p)
             except Exception as e:
                 self.logger.warning(f"Failed to prepare row: {e}")
-        
+
         if not prepared:
             return 0
-        
+
         # Build UPSERT query for zen_contacts schema
         query = """
         INSERT INTO zen_contacts (
@@ -321,37 +321,37 @@ class DatabaseWriter:
         ON CONFLICT (source_link, partition_key) DO UPDATE SET
             emails = ARRAY(
                 SELECT DISTINCT unnest FROM unnest(
-                    COALESCE(zen_contacts.emails, '{}') || 
+                    COALESCE(zen_contacts.emails, '{}') ||
                     COALESCE(EXCLUDED.emails, '{}')
                 ) WHERE unnest IS NOT NULL AND unnest != ''
             ),
             emails_count = (
                 SELECT COUNT(DISTINCT e) FROM unnest(
-                    COALESCE(zen_contacts.emails, '{}') || 
+                    COALESCE(zen_contacts.emails, '{}') ||
                     COALESCE(EXCLUDED.emails, '{}')
                 ) AS e WHERE e IS NOT NULL AND e != ''
             ),
             phones = ARRAY(
                 SELECT DISTINCT unnest FROM unnest(
-                    COALESCE(zen_contacts.phones, '{}') || 
+                    COALESCE(zen_contacts.phones, '{}') ||
                     COALESCE(EXCLUDED.phones, '{}')
                 ) WHERE unnest IS NOT NULL AND unnest != ''
             ),
             phones_count = (
                 SELECT COUNT(DISTINCT p) FROM unnest(
-                    COALESCE(zen_contacts.phones, '{}') || 
+                    COALESCE(zen_contacts.phones, '{}') ||
                     COALESCE(EXCLUDED.phones, '{}')
                 ) AS p WHERE p IS NOT NULL AND p != ''
             ),
             whatsapp = ARRAY(
                 SELECT DISTINCT unnest FROM unnest(
-                    COALESCE(zen_contacts.whatsapp, '{}') || 
+                    COALESCE(zen_contacts.whatsapp, '{}') ||
                     COALESCE(EXCLUDED.whatsapp, '{}')
                 ) WHERE unnest IS NOT NULL AND unnest != ''
             ),
             whatsapp_count = (
                 SELECT COUNT(DISTINCT w) FROM unnest(
-                    COALESCE(zen_contacts.whatsapp, '{}') || 
+                    COALESCE(zen_contacts.whatsapp, '{}') ||
                     COALESCE(EXCLUDED.whatsapp, '{}')
                 ) AS w WHERE w IS NOT NULL AND w != ''
             ),
@@ -370,7 +370,7 @@ class DatabaseWriter:
             last_scrape_at = NOW(),
             updated_at = NOW()
         """
-        
+
         # Convert to tuples (last_scrape_at will be set by trigger/NOW() in UPDATE clause)
         import datetime
         now = datetime.datetime.now()
@@ -379,7 +379,7 @@ class DatabaseWriter:
                 # Primary keys
                 p['link'], p['partition_key'], p['country'], p['country_name'], p['title'], p['category'], p['website'],
                 # Address fields
-                p['city'], p['state'], p['borough'], p['street'], p['address'], p['postal_code'], 
+                p['city'], p['state'], p['borough'], p['street'], p['address'], p['postal_code'],
                 p['latitude'], p['longitude'], p['timezone'],
                 # GMaps metadata (all fields)
                 p['gmaps_phone'], p['gmaps_rating'], p['gmaps_review_count'], p['gmaps_cid'], p['gmaps_data_id'],
@@ -398,40 +398,40 @@ class DatabaseWriter:
             )
             for p in prepared
         ]
-        
+
         # Execute with retry
         for attempt in range(self.retry_count):
             conn = None
             try:
                 conn = self.pool.getconn()
                 cursor = conn.cursor()
-                
+
                 execute_values(cursor, query, values)
                 conn.commit()
-                
+
                 self.logger.debug(f"Batch UPSERT: {len(values)} rows")
                 return len(values)
-                
+
             except psycopg2.OperationalError as e:
                 self.logger.warning(f"DB error (attempt {attempt+1}/{self.retry_count}): {e}")
                 if attempt < self.retry_count - 1:
                     time.sleep(self.retry_delay * (2 ** attempt))
                     continue
                 return 0
-                
+
             except Exception as e:
                 self.logger.error(f"Batch UPSERT error: {e}", exc_info=True)
                 return 0
-                
+
             finally:
                 if conn:
                     try:
                         self.pool.putconn(conn)
                     except:
                         pass
-        
+
         return 0
-    
+
     def get_country_stats(self) -> Dict[str, int]:
         """Get row count per country."""
         conn = self.pool.getconn()
@@ -446,14 +446,14 @@ class DatabaseWriter:
             return {row[0]: row[1] for row in cursor.fetchall()}
         finally:
             self.pool.putconn(conn)
-    
+
     def get_total_stats(self) -> Dict[str, Any]:
         """Get overall statistics."""
         conn = self.pool.getconn()
         try:
             cursor = conn.cursor()
             cursor.execute("""
-                SELECT 
+                SELECT
                     COUNT(*) as total,
                     SUM(emails_count) as total_emails,
                     SUM(phones_count) as total_phones,
@@ -475,11 +475,11 @@ class DatabaseWriter:
             }
         finally:
             self.pool.putconn(conn)
-    
+
     # =========================================================================
     # FAILURE TRACKING METHODS
     # =========================================================================
-    
+
     def mark_failed(self, source_link: str, error: str, server_id: str = 'unknown') -> bool:
         """
         Mark a row as failed with error message.
@@ -489,7 +489,7 @@ class DatabaseWriter:
         try:
             cursor = conn.cursor()
             partition_key = self._get_partition_key(source_link)
-            
+
             cursor.execute("""
                 UPDATE zen_contacts SET
                     scrape_status = 'failed',
@@ -501,10 +501,10 @@ class DatabaseWriter:
                 WHERE source_link = %s
                 AND partition_key = %s
             """, (error[:500] if error else '', server_id, source_link, partition_key))
-            
+
             conn.commit()
             return cursor.rowcount > 0
-            
+
         except Exception as e:
             self.logger.error(f"Failed to mark row as failed: {e}")
             if conn:
@@ -512,14 +512,14 @@ class DatabaseWriter:
             return False
         finally:
             self.pool.putconn(conn)
-    
+
     def mark_success(self, source_link: str, server_id: str = 'unknown') -> bool:
         """Mark a row as successfully processed."""
         conn = self.pool.getconn()
         try:
             cursor = conn.cursor()
             partition_key = self._get_partition_key(source_link)
-            
+
             cursor.execute("""
                 UPDATE zen_contacts SET
                     scrape_status = 'success',
@@ -530,10 +530,10 @@ class DatabaseWriter:
                 WHERE source_link = %s
                 AND partition_key = %s
             """, (server_id, source_link, partition_key))
-            
+
             conn.commit()
             return cursor.rowcount > 0
-            
+
         except Exception as e:
             self.logger.error(f"Failed to mark row as success: {e}")
             if conn:
@@ -541,17 +541,17 @@ class DatabaseWriter:
             return False
         finally:
             self.pool.putconn(conn)
-    
+
     def get_retryable_rows(
-        self, 
-        batch_size: int = 100, 
+        self,
+        batch_size: int = 100,
         max_retries: int = 3,
         retry_delay_minutes: int = 30,
         country_filter: str = None
     ) -> List[Dict[str, Any]]:
         """
         Get failed rows eligible for retry.
-        
+
         Args:
             batch_size: Number of rows to return
             max_retries: Maximum retry attempts before giving up
@@ -561,9 +561,9 @@ class DatabaseWriter:
         country_clause = ""
         if country_filter:
             country_clause = f"AND country_code = '{country_filter.upper()[:2]}'"
-        
+
         query = f"""
-            SELECT 
+            SELECT
                 source_link,
                 partition_key,
                 business_website,
@@ -580,28 +580,28 @@ class DatabaseWriter:
             ORDER BY retry_count ASC, last_scrape_at ASC NULLS FIRST
             LIMIT %s
         """
-        
+
         conn = self.pool.getconn()
         try:
             cursor = conn.cursor()
             cursor.execute(query, (max_retries, retry_delay_minutes, batch_size))
-            
+
             columns = [desc[0] for desc in cursor.description]
             return [dict(zip(columns, row)) for row in cursor.fetchall()]
-            
+
         except Exception as e:
             self.logger.error(f"Failed to get retryable rows: {e}")
             return []
         finally:
             self.pool.putconn(conn)
-    
+
     def get_failure_stats(self) -> Dict[str, Any]:
         """Get failure statistics for monitoring."""
         conn = self.pool.getconn()
         try:
             cursor = conn.cursor()
             cursor.execute("""
-                SELECT 
+                SELECT
                     COUNT(*) FILTER (WHERE scrape_status = 'failed') as total_failed,
                     COUNT(*) FILTER (WHERE scrape_status = 'failed' AND COALESCE(retry_count, 0) = 0) as failed_no_retry,
                     COUNT(*) FILTER (WHERE scrape_status = 'failed' AND COALESCE(retry_count, 0) = 1) as failed_retry_1,
@@ -624,7 +624,7 @@ class DatabaseWriter:
             return {}
         finally:
             self.pool.putconn(conn)
-    
+
     def insert_pending_row(self, row_data: Dict[str, Any], server_id: str = 'unknown') -> bool:
         """
         Insert a row as pending (claimed but not yet processed).
@@ -634,14 +634,14 @@ class DatabaseWriter:
             prepared = self._prepare_row(row_data)
             if not prepared.get('link'):
                 return False
-            
+
             conn = self.pool.getconn()
             try:
                 cursor = conn.cursor()
-                
+
                 cursor.execute("""
                     INSERT INTO zen_contacts (
-                        source_link, partition_key, country_code, country_name, 
+                        source_link, partition_key, country_code, country_name,
                         business_name, business_category, business_website,
                         source_id, scrape_status, last_scrape_server
                     ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'pending', %s)
@@ -652,10 +652,10 @@ class DatabaseWriter:
                     prepared['title'], prepared['category'], prepared['website'],
                     prepared['source_id'], server_id
                 ))
-                
+
                 conn.commit()
                 return cursor.rowcount > 0
-                
+
             except Exception as e:
                 self.logger.error(f"Failed to insert pending row: {e}")
                 if conn:
@@ -663,23 +663,23 @@ class DatabaseWriter:
                 return False
             finally:
                 self.pool.putconn(conn)
-                
+
         except Exception as e:
             self.logger.error(f"Error preparing pending row: {e}")
             return False
-    
+
     # =========================================================================
     # SERVER REGISTRATION METHODS
     # =========================================================================
-    
-    def register_server(self, server_id: str, server_name: str = None, 
+
+    def register_server(self, server_id: str, server_name: str = None,
                        region: str = None, workers: int = 6, batch_size: int = 100) -> bool:
         """Register server in zen_servers table."""
         import socket
-        
+
         if not server_name:
             server_name = server_id
-        
+
         conn = self.pool.getconn()
         try:
             cursor = conn.cursor()
@@ -713,15 +713,15 @@ class DatabaseWriter:
             return False
         finally:
             self.pool.putconn(conn)
-    
+
     def unregister_server(self, server_id: str) -> bool:
         """Mark server as offline."""
         conn = self.pool.getconn()
         try:
             cursor = conn.cursor()
             cursor.execute("""
-                UPDATE zen_servers SET 
-                    status = 'offline', 
+                UPDATE zen_servers SET
+                    status = 'offline',
                     current_task = NULL,
                     last_activity = NOW()
                 WHERE server_id = %s
@@ -737,8 +737,8 @@ class DatabaseWriter:
             return False
         finally:
             self.pool.putconn(conn)
-    
-    def server_heartbeat(self, server_id: str, current_task: str = None, 
+
+    def server_heartbeat(self, server_id: str, current_task: str = None,
                         urls_per_minute: float = None) -> bool:
         """Send heartbeat to update server status."""
         conn = self.pool.getconn()
@@ -759,9 +759,9 @@ class DatabaseWriter:
             return False
         finally:
             self.pool.putconn(conn)
-    
+
     def update_server_stats(self, server_id: str, processed: int = 0, success: int = 0,
-                           failed: int = 0, emails: int = 0, phones: int = 0, 
+                           failed: int = 0, emails: int = 0, phones: int = 0,
                            whatsapp: int = 0) -> bool:
         """Update server statistics after batch processing."""
         conn = self.pool.getconn()
@@ -778,13 +778,13 @@ class DatabaseWriter:
                     session_processed = session_processed + %s,
                     last_activity = NOW(),
                     last_heartbeat = NOW(),
-                    success_rate = CASE 
-                        WHEN (total_processed + %s) > 0 
+                    success_rate = CASE
+                        WHEN (total_processed + %s) > 0
                         THEN ((total_success + %s)::NUMERIC / (total_processed + %s) * 100)
-                        ELSE 0 
+                        ELSE 0
                     END
                 WHERE server_id = %s
-            """, (processed, success, failed, emails, phones, whatsapp, 
+            """, (processed, success, failed, emails, phones, whatsapp,
                   processed, processed, success, processed, server_id))
             conn.commit()
             return True
@@ -800,9 +800,9 @@ def create_database_writer(logger: logging.Logger) -> Optional[DatabaseWriter]:
     try:
         from dotenv import load_dotenv
         import os
-        
+
         load_dotenv()
-        
+
         config = DatabaseConfig(
             host=os.getenv('DB_HOST', 'localhost'),
             port=int(os.getenv('DB_PORT', '5432')),
@@ -814,13 +814,13 @@ def create_database_writer(logger: logging.Logger) -> Optional[DatabaseWriter]:
             connect_timeout=int(os.getenv('DB_CONNECT_TIMEOUT', '10')),
             statement_timeout=int(os.getenv('DB_STATEMENT_TIMEOUT', '60000')),
         )
-        
+
         if not config.password:
             logger.error("DB_PASSWORD not set in .env file")
             return None
-        
+
         return DatabaseWriter(config, logger)
-        
+
     except Exception as e:
         logger.error(f"Error creating DatabaseWriter: {e}")
         return None
