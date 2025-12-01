@@ -12,7 +12,8 @@ import re
 import signal
 import atexit
 from pathlib import Path
-from typing import List, Set, Dict
+from typing import List, Set, Dict, Tuple
+from collections import deque
 
 # ============================================================================
 # PYTHON INTERPRETER RESOLUTION (must be at top, before any usage)
@@ -54,7 +55,7 @@ PS_TIMEOUT_SECONDS = 5
 _lock = threading.Lock()
 _procs: Dict[str, subprocess.Popen] = {}
 _logger = None  # Global logger ref for signal handler
-_reaped_pids = []  # Queue for reaped PIDs to log in main loop (async-signal-safe)
+_reaped_pids: deque[Tuple[int, int]] = deque(maxlen=100)  # Bounded queue for reaped PIDs (max 100 entries)
 
 
 def sigchld_handler(signum, frame):
@@ -75,6 +76,7 @@ def sigchld_handler(signum, frame):
             if pid == 0:
                 break
             # Store for logging in main loop (async-signal-safe)
+            # deque with maxlen automatically removes old entries when full
             _reaped_pids.append((pid, status >> 8))
     except ChildProcessError:
         # No more children to reap
@@ -437,9 +439,10 @@ def monitor_loop():
                 # FIX: Log PIDs reaped by signal handler (async-signal-safe logging)
                 global _reaped_pids
                 if _reaped_pids:
-                    reaped_copy = _reaped_pids.copy()
+                    # Convert deque to list for iteration
+                    reaped_list = list(_reaped_pids)
                     _reaped_pids.clear()
-                    for pid, exit_code in reaped_copy:
+                    for pid, exit_code in reaped_list:
                         logger.debug(f"Child process {pid} reaped by signal handler with exit code {exit_code}")
 
                 # AGGRESSIVE ZOMBIE REAPING: Reap any orphaned processes

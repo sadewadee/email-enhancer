@@ -16,6 +16,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from typing import Dict, List, Optional, Any
 import traceback
+from collections import deque
 
 # Import our modules
 from csv_processor import CSVProcessor
@@ -168,23 +169,28 @@ class EmailScraperValidator:
         class DuplicateFilter(logging.Filter):
             def __init__(self):
                 super().__init__()
-                self.seen_messages = {}
+                self.seen_messages: deque = deque(maxlen=1000)  # Bounded deque with max 1000 entries
                 self.timeout = 1.0  # Suppress duplicates within 1 second
 
             def filter(self, record):
                 current_time = time.time()
                 msg_key = f"{record.levelname}:{record.getMessage()}"
 
-                # Clean old entries
-                self.seen_messages = {k: v for k, v in self.seen_messages.items()
-                                      if current_time - v < self.timeout}
-
-                # Check if seen recently
-                if msg_key in self.seen_messages:
-                    return False  # Suppress duplicate
+                # Clean old entries and check for duplicates in one pass
+                recent_messages = deque(maxlen=1000)  # Temporary cleaner deque
+                for stored_key, stored_time in self.seen_messages:
+                    # Keep only recent messages
+                    if current_time - stored_time < self.timeout:
+                        recent_messages.append((stored_key, stored_time))
+                        # Check if it's a duplicate
+                        if stored_key == msg_key:
+                            # Save cleaned messages back
+                            self.seen_messages = recent_messages
+                            return False  # Suppress duplicate
 
                 # Mark as seen
-                self.seen_messages[msg_key] = current_time
+                recent_messages.append((msg_key, current_time))
+                self.seen_messages = recent_messages
                 return True
 
         # Console level filter - only show INFO and above on console
