@@ -484,9 +484,25 @@ class EmailScraperValidator:
         
         batch_size = self.config.get('batch_size_dsn', 100)
         limit_dsn = self.config.get('limit_dsn', None)
-        
+
+        # Parse country and category filters
+        dsn_countries = None
+        dsn_categories = None
+        countries_raw = self.config.get('dsn_countries')
+        categories_raw = self.config.get('dsn_categories')
+        if countries_raw:
+            dsn_countries = [c.strip().upper()[:2] for c in countries_raw.split(',') if c.strip()]
+        if categories_raw:
+            dsn_categories = [c.strip().lower() for c in categories_raw.split(',') if c.strip()]
+
         self.logger.info(f"[{server_id}] Starting DSN mode - reading from results table")
-        self.logger.info(f"[{server_id}] Batch size: {batch_size}" + (f", Limit: {limit_dsn}" if limit_dsn else ""))
+        filter_info = []
+        if dsn_countries:
+            filter_info.append(f"countries={','.join(dsn_countries)}")
+        if dsn_categories:
+            filter_info.append(f"categories={','.join(dsn_categories)}")
+        filter_str = f" | Filters: {', '.join(filter_info)}" if filter_info else ""
+        self.logger.info(f"[{server_id}] Batch size: {batch_size}" + (f", Limit: {limit_dsn}" if limit_dsn else "") + filter_str)
         
         # Initialize DB source reader (uses zen_contacts)
         try:
@@ -535,8 +551,8 @@ class EmailScraperValidator:
             source_reader.close()
             return {'status': 'failed', 'error': str(e)}
         
-        # Get initial counts
-        pending_count = source_reader.get_pending_count()
+        # Get initial counts (with filters if specified)
+        pending_count = source_reader.get_pending_count(countries=dsn_countries, category_keywords=dsn_categories)
         total_count = source_reader.get_total_count()
         completed_count = source_reader.get_completed_count()
         
@@ -583,8 +599,13 @@ class EmailScraperValidator:
                 remaining = (limit_dsn - stats['total_processed']) if limit_dsn else batch_size
                 claim_size = min(batch_size, remaining) if limit_dsn else batch_size
                 
-                # Claim batch of rows (exclude already-claimed IDs at query level)
-                batch = source_reader.claim_batch(claim_size, exclude_ids=all_claimed_ids)
+                # Claim batch of rows (with filters and exclude already-claimed IDs)
+                batch = source_reader.claim_batch(
+                    claim_size,
+                    exclude_ids=all_claimed_ids,
+                    countries=dsn_countries,
+                    category_keywords=dsn_categories
+                )
                 
                 if not batch:
                     self.logger.info(f"[{server_id}] No more pending rows to claim")
@@ -968,6 +989,8 @@ def create_config_from_args(args) -> Dict[str, Any]:
         'server_id': getattr(args, 'server_id', None),
         'batch_size_dsn': getattr(args, 'batch_size_dsn', 100),
         'limit_dsn': getattr(args, 'limit_dsn', None),
+        'dsn_countries': getattr(args, 'country', None),
+        'dsn_categories': getattr(args, 'cat', None),
     }
     return config
 
@@ -1051,6 +1074,8 @@ Examples:
         p.add_argument('--server-id', type=str, default=None, help='Unique server identifier for --dsn mode (e.g., sg-01). Auto-generated from hostname if not provided.')
         p.add_argument('--batch-size-dsn', type=int, default=100, help='Batch size for --dsn mode (default: 100)')
         p.add_argument('--limit-dsn', type=int, default=None, help='Limit total rows to process in --dsn mode (for testing)')
+        p.add_argument('--country', type=str, default=None, help='Filter by country codes (comma-separated ISO codes, e.g., "US,ID,SG"). DSN mode only.')
+        p.add_argument('--cat', type=str, default=None, help='Filter by category keywords (comma-separated, substring match, e.g., "yoga,wellness,fitness"). DSN mode only.')
         # Fast mode: limit extraction to speed up scraping
         p.add_argument('--fast', action='store_true', help='Fast mode: limit extraction (1 WA, 1 social profile per platform, 1 phone, 4 emails max per row)')
 

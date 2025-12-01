@@ -1,3 +1,29 @@
+##### [0.1.8] - 2025-12-01
+
+        - Added
+            - **DSN Mode Country & Category Filtering**: Workload partitioning for multi-server deployments
+                - New CLI flags: `--country` (comma-separated ISO codes, e.g., "US,ID,SG")
+                - New CLI flags: `--cat` (comma-separated category keywords, e.g., "yoga,wellness,fitness")
+                - Category matching uses case-insensitive substring match (LIKE %keyword%)
+                - Multiple keywords use OR logic (match ANY keyword)
+                - Combined filtering supported: `--dsn --country US --cat yoga,pilates`
+                - Files modified: main.py (CLI + config), db_source_reader.py (SQL filtering)
+
+            - **Filter-aware Progress Tracking**: Pending count and progress bar reflect filtered dataset
+                - `get_pending_count()` now supports country and category filters
+                - Accurate progress estimation when using workload partitioning
+
+        - Technical Details
+            - Country filter: `UPPER(LEFT(data->'complete_address'->>'country', 2)) = ANY(%s)` (array match)
+            - Category filter: `LOWER(data->>'category') LIKE '%keyword%'` (case-insensitive substring)
+            - Filter logging: Startup logs show active filters for debugging
+            - Backward compatible: No filters = process all rows (existing behavior)
+
+        - Performance Notes
+            - For large datasets with category filtering, consider GIN trigram index:
+              `CREATE INDEX idx_results_category_trgm ON results USING gin(LOWER(data->>'category') gin_trgm_ops);`
+            - Country filtering efficient with functional index on country field
+
 ##### [0.1.7] - 2025-11-30
 
         - Added

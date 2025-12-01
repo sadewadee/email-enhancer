@@ -88,7 +88,14 @@ class DBSourceReader:
             self.pool.closeall()
             self.logger.info(f"[{self.server_id}] Connection closed")
 
-    def claim_batch(self, batch_size: int = 100, country_filter: str = None, exclude_ids: set = None) -> List[Dict[str, Any]]:
+    def claim_batch(
+        self,
+        batch_size: int = 100,
+        country_filter: Optional[str] = None,
+        exclude_ids: Optional[set] = None,
+        countries: Optional[List[str]] = None,
+        category_keywords: Optional[List[str]] = None
+    ) -> List[Dict[str, Any]]:
         """
         Claim batch of unprocessed rows.
 
@@ -98,17 +105,24 @@ class DBSourceReader:
 
         Args:
             batch_size: Number of rows to claim
-            country_filter: Optional ISO country code to filter (e.g., 'US', 'ID')
+            country_filter: Optional ISO country code to filter (e.g., 'US', 'ID') - DEPRECATED, use countries
             exclude_ids: Set of result IDs to exclude (already claimed in this session)
+            countries: List of ISO country codes to filter (e.g., ['US', 'ID', 'SG'])
+            category_keywords: List of category keywords for substring match (e.g., ['yoga', 'fitness'])
 
         Returns:
             List of parsed row dictionaries
         """
-        # Build query with optional country filter
+        # Build query with optional country filter (support both old and new params)
         country_clause = ""
-        if country_filter:
+        if countries and len(countries) > 0:
+            # New: multiple countries with ANY()
+            countries_upper = [c.upper()[:2] for c in countries]
+            country_clause = "AND UPPER(LEFT(r.data->'complete_address'->>'country', 2)) = ANY(%s)"
+        elif country_filter:
+            # Legacy: single country filter
             country_filter = country_filter.upper()[:2]
-            country_clause = f"AND (r.data->'complete_address'->>'country')::VARCHAR(2) = '{country_filter}'"
+            country_clause = f"AND UPPER(LEFT(r.data->'complete_address'->>'country', 2)) = '{country_filter}'"
 
         # Build exclude clause to prevent re-claiming same rows
         exclude_clause = ""
@@ -119,6 +133,17 @@ class DBSourceReader:
                 exclude_clause = f"AND r.id != {exclude_list[0]}"
             else:
                 exclude_clause = f"AND r.id NOT IN {exclude_list}"
+
+        # Build category clause (ILIKE with OR for multiple keywords)
+        category_clause = ""
+        if category_keywords and len(category_keywords) > 0:
+            # Each keyword uses ILIKE %keyword% for substring match
+            conditions = []
+            for kw in category_keywords:
+                # Escape single quotes and use lowercase for case-insensitive match
+                kw_safe = kw.lower().replace("'", "''")
+                conditions.append(f"LOWER(r.data->>'category') LIKE '%{kw_safe}%'")
+            category_clause = "AND (" + " OR ".join(conditions) + ")"
 
         query = f"""
         SELECT r.id, r.data
@@ -131,6 +156,7 @@ class DBSourceReader:
         AND r.data->>'web_site' IS NOT NULL
         AND r.data->>'web_site' != ''
         {country_clause}
+        {category_clause}
         {exclude_clause}
         ORDER BY r.id
         LIMIT %s;
@@ -139,8 +165,14 @@ class DBSourceReader:
         conn = self.pool.getconn()
         try:
             cursor = conn.cursor()
+            # Build params list based on which clauses need parameters
+            params = []
+            if countries and len(countries) > 0:
+                params.append(countries_upper)
+            params.append(batch_size)
+
             self.logger.info(f"[{self.server_id}] Executing claim query...")
-            cursor.execute(query, (batch_size,))
+            cursor.execute(query, tuple(params))
             self.logger.info(f"[{self.server_id}] Query executed, fetching rows...")
             rows = cursor.fetchall()
             self.logger.info(f"[{self.server_id}] Fetched {len(rows)} rows")
@@ -306,12 +338,31 @@ class DBSourceReader:
             'original_data': data,
         }
 
-    def get_pending_count(self, country_filter: str = None) -> int:
-        """Count pending rows."""
+    def get_pending_count(
+        self,
+        country_filter: Optional[str] = None,
+        countries: Optional[List[str]] = None,
+        category_keywords: Optional[List[str]] = None
+    ) -> int:
+        """Count pending rows with optional filters."""
+        # Country filter
         country_clause = ""
-        if country_filter:
+        countries_upper = None
+        if countries and len(countries) > 0:
+            countries_upper = [c.upper()[:2] for c in countries]
+            country_clause = "AND UPPER(LEFT(r.data->'complete_address'->>'country', 2)) = ANY(%s)"
+        elif country_filter:
             country_filter = country_filter.upper()[:2]
-            country_clause = f"AND (r.data->'complete_address'->>'country')::VARCHAR(2) = '{country_filter}'"
+            country_clause = f"AND UPPER(LEFT(r.data->'complete_address'->>'country', 2)) = '{country_filter}'"
+
+        # Category filter
+        category_clause = ""
+        if category_keywords and len(category_keywords) > 0:
+            conditions = []
+            for kw in category_keywords:
+                kw_safe = kw.lower().replace("'", "''")
+                conditions.append(f"LOWER(r.data->>'category') LIKE '%{kw_safe}%'")
+            category_clause = "AND (" + " OR ".join(conditions) + ")"
 
         query = f"""
         SELECT COUNT(*) FROM results r
@@ -322,13 +373,17 @@ class DBSourceReader:
         )
         AND r.data->>'web_site' IS NOT NULL
         AND r.data->>'web_site' != ''
-        {country_clause};
+        {country_clause}
+        {category_clause};
         """
 
         conn = self.pool.getconn()
         try:
             cursor = conn.cursor()
-            cursor.execute(query)
+            if countries_upper:
+                cursor.execute(query, (countries_upper,))
+            else:
+                cursor.execute(query)
             return cursor.fetchone()[0]
         except Exception as e:
             self.logger.error(f"[{self.server_id}] Count error: {e}")
