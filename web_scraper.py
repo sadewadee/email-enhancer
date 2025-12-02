@@ -20,6 +20,16 @@ from urllib.error import URLError, HTTPError
 import threading
 import chardet  # FIX: For proper encoding detection of non-Latin content
 
+# Phase 2 Integration (optional)
+try:
+    from phase2_integration import (
+        get_phase2_manager, is_phase2_enabled,
+        get_timeout, record_request
+    )
+    PHASE2_AVAILABLE = True
+except ImportError:
+    PHASE2_AVAILABLE = False
+
 
 def get_best_parser() -> str:
     """Get the best available HTML parser (lxml > html.parser)."""
@@ -862,7 +872,8 @@ class WebScraper:
                  challenge_budget: int = 180,
                  dead_site_budget: int = 20,
                  min_retry_threshold: int = 5,
-                 fast_mode: bool = False):
+                 fast_mode: bool = False,
+                 use_pool: bool = False):
         """
         Initialize the web scraper.
 
@@ -882,6 +893,7 @@ class WebScraper:
             challenge_budget (int): Budget for Cloudflare/challenge sites in seconds (default: 120)
             dead_site_budget (int): Budget for dead sites in seconds (default: 20)
             min_retry_threshold (int): Minimum remaining budget to attempt retry in seconds (default: 5)
+            use_pool (bool): Use browser worker pool for better performance (default: False)
         """
         self.headless = headless
         self.solve_cloudflare = solve_cloudflare
@@ -891,6 +903,10 @@ class WebScraper:
         self.disable_resources = disable_resources
         self.static_first = static_first
         self.fast_mode = fast_mode  # Fast mode: limit extraction for speed
+        self.use_pool = use_pool  # Use browser worker pool
+        
+        # Browser worker pool (lazy initialized)
+        self._browser_pool = None
         self.parser = get_best_parser()  # Use lxml (3-5x faster) or fallback to html.parser
         # Per-URL maximum wait for Cloudflare wait page before skipping
         self.cf_wait_timeout = cf_wait_timeout
@@ -1650,6 +1666,10 @@ class WebScraper:
             proxy_info = self.proxy_manager.get_next_proxy()
             if proxy_info:
                 proxy_config = self.proxy_manager.convert_to_playwright_format(proxy_info)
+        
+        # Use browser worker pool if enabled (3-5x faster)
+        if self.use_pool:
+            return self._fetch_with_pool(url, timeout, proxy_config)
 
         # Acquire browser semaphore to limit concurrent browser instances
         # This prevents Camoufox crashes from too many concurrent processes
@@ -1802,6 +1822,54 @@ class WebScraper:
                 except Exception:
                     pass  # Suppress errors during shutdown
 
+    def _fetch_with_pool(self, url: str, timeout: int, proxy_config: Optional[Dict] = None):
+        """
+        Fetch URL using browser worker pool (3-5x faster than subprocess per URL).
+        
+        Args:
+            url: Target URL
+            timeout: Timeout in seconds
+            proxy_config: Optional proxy configuration
+            
+        Returns:
+            SimpleNamespace page-like object on success, or None on error
+        """
+        # Lazy initialize browser pool
+        if self._browser_pool is None:
+            try:
+                from browser_worker_pool import BrowserWorkerPool
+                self._browser_pool = BrowserWorkerPool(
+                    num_workers=self.max_concurrent_browsers,
+                    headless=self.headless,
+                    block_images=self.block_images,
+                    disable_resources=self.disable_resources,
+                    network_idle=self.network_idle,
+                    solve_cloudflare=self.solve_cloudflare
+                )
+                self._browser_pool.start()
+                self.logger.info(f"🚀 Browser worker pool started with {self.max_concurrent_browsers} workers")
+            except Exception as e:
+                self.logger.error(f"Failed to start browser pool: {e}")
+                return None
+        
+        try:
+            result = self._browser_pool.fetch(url, timeout=timeout, proxy_config=proxy_config)
+            
+            if result.ok:
+                return SimpleNamespace(
+                    status=result.status,
+                    html_content=result.html_content,
+                    url=result.final_url,
+                    proxy_used=proxy_config.get('server') if proxy_config else None
+                )
+            else:
+                self.logger.debug(f"Pool fetch failed: {url} | {result.error}")
+                return None
+                
+        except Exception as e:
+            self.logger.error(f"Pool fetch error: {url} | {e}")
+            return None
+
     def scrape_url(self, url: str) -> Dict:
         """
         Fetch webpage content with smart proxy usage and anti-bot bypass.
@@ -1835,6 +1903,13 @@ class WebScraper:
         start_time = time.time()
         self.proxy_stats['total_requests'] += 1
         total_budget = 60  # Default budget (will be overridden after detection)
+        
+        # Phase 2: Get adaptive timeout if enabled
+        domain = urlparse(url).netloc or ''
+        if PHASE2_AVAILABLE and is_phase2_enabled():
+            adaptive_budget = get_timeout(domain)
+            if adaptive_budget > 0:
+                total_budget = int(adaptive_budget)
 
         # Set domain context for Scrapling logs
         _SCRAPLING_CONTEXT.domain = (urlparse(url).netloc or '').lower()
@@ -2046,6 +2121,11 @@ class WebScraper:
                     self.proxy_stats['proxy_failed'] += 1
                     break
 
+            # Phase 2: Record request result
+            if PHASE2_AVAILABLE and is_phase2_enabled():
+                success = result.get('status') == 200 and result.get('html')
+                record_request(domain, result.get('load_time', 0), success=success, timeout=False)
+            
             return result
 
         except Exception as e:
@@ -2054,6 +2134,12 @@ class WebScraper:
             if result['status'] == 0:
                 result['status'] = 500
             result['load_time'] = elapsed
+            
+            # Phase 2: Record failed request
+            if PHASE2_AVAILABLE and is_phase2_enabled():
+                is_timeout = 'timeout' in str(e).lower()
+                record_request(domain, elapsed, success=False, timeout=is_timeout)
+            
             return result
 
         finally:

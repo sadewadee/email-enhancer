@@ -104,7 +104,8 @@ class EmailScraperValidator:
             dead_site_budget=self.config.get('dead_site_budget', 20),
             min_retry_threshold=self.config.get('min_retry_threshold', 5),
             fast=self.config.get('fast', False),
-            db_writer=self.db_writer  # Pass db_writer to CSV processor
+            db_writer=self.db_writer,  # Pass db_writer to CSV processor
+            use_pool=self.config.get('use_pool', False)  # Browser worker pool for 3-5x speedup
         )
         self.post_processor = PostProcessor()
 
@@ -285,7 +286,7 @@ class EmailScraperValidator:
         try:
             # Setup output directory
             if output_dir is None:
-                output_dir = os.path.dirname(input_file)
+                output_dir = os.path.dirname(input_file) or '.'
 
             os.makedirs(output_dir, exist_ok=True)
 
@@ -982,6 +983,8 @@ def create_config_from_args(args) -> Dict[str, Any]:
         'min_retry_threshold': getattr(args, 'min_retry_threshold', 5),
         # Fast mode: limit extraction for speed
         'fast': getattr(args, 'fast', False),
+        # Browser worker pool for 3-5x faster scraping
+        'use_pool': getattr(args, 'use_pool', False),
         # Database export: enable PostgreSQL export
         'export_db': getattr(args, 'export_db', False),
         # DSN mode: read from result table
@@ -1078,6 +1081,12 @@ Examples:
         p.add_argument('--cat', type=str, default=None, help='Filter by category keywords (comma-separated, substring match, e.g., "yoga,wellness,fitness"). DSN mode only.')
         # Fast mode: limit extraction to speed up scraping
         p.add_argument('--fast', action='store_true', help='Fast mode: limit extraction (1 WA, 1 social profile per platform, 1 phone, 4 emails max per row)')
+        
+        # Phase 2: Performance optimizations
+        p.add_argument('--phase2', action='store_true', help='Enable Phase 2 optimizations (memory monitoring, adaptive timeout)')
+        
+        # Browser pool for 3-5x faster performance
+        p.add_argument('--use-pool', action='store_true', help='Use browser worker pool for 3-5x faster scraping (persistent workers)')
 
     args = parser.parse_args()
 
@@ -1088,6 +1097,25 @@ Examples:
     try:
         # Create configuration
         config = create_config_from_args(args)
+        
+        # Enable Phase 2 optimizations if requested
+        if getattr(args, 'phase2', False):
+            try:
+                from phase2_integration import enable_phase2
+                phase2_config = {
+                    'memory_monitor': True,
+                    'adaptive_timeout': True,
+                    'metrics': True,
+                    'memory_warning': 0.75,
+                    'memory_critical': 0.90,
+                    'total_timeout': config.get('timeout', 90)
+                }
+                if enable_phase2(phase2_config):
+                    logging.info("Phase 2 optimizations enabled")
+                else:
+                    logging.warning("Failed to enable Phase 2 optimizations")
+            except ImportError:
+                logging.warning("Phase 2 modules not available")
 
         # Initialize scraper
         scraper = EmailScraperValidator(config)

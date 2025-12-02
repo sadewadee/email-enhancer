@@ -27,6 +27,16 @@ from email_validation import EmailValidator
 from whatsapp_validator import WhatsAppValidator
 from url_cleaner import URLCleaner
 
+# Phase 2 Integration (optional)
+try:
+    from phase2_integration import (
+        get_phase2_manager, is_phase2_enabled, 
+        check_memory, should_throttle, record_metric
+    )
+    PHASE2_AVAILABLE = True
+except ImportError:
+    PHASE2_AVAILABLE = False
+
 # ============================================================================
 # ENCODING DETECTION UTILITY
 # ============================================================================
@@ -365,7 +375,7 @@ class CSVProcessor:
     Handles parallel processing of CSV files containing URLs for contact extraction.
     """
 
-    def __init__(self, max_workers: int = 5, timeout: int = 30, block_images: bool = False, disable_resources: bool = False, network_idle: bool = True, cf_wait_timeout: int = 60, skip_on_challenge: bool = False, proxy_file: str = "proxy.txt", max_concurrent_browsers: int = None, normal_budget: int = 60, challenge_budget: int = 120, dead_site_budget: int = 20, min_retry_threshold: int = 5, fast: bool = False, db_writer=None):
+    def __init__(self, max_workers: int = 5, timeout: int = 30, block_images: bool = False, disable_resources: bool = False, network_idle: bool = True, cf_wait_timeout: int = 60, skip_on_challenge: bool = False, proxy_file: str = "proxy.txt", max_concurrent_browsers: int = None, normal_budget: int = 60, challenge_budget: int = 120, dead_site_budget: int = 20, min_retry_threshold: int = 5, fast: bool = False, db_writer=None, use_pool: bool = False):
         """
         Initialize CSV processor.
 
@@ -385,6 +395,7 @@ class CSVProcessor:
             min_retry_threshold: Minimum remaining budget to attempt retry in seconds (default: 5)
             fast: Fast mode - limit extraction (1 WA, 1 social profile, 1 phone, 4 emails max)
             db_writer: Optional DatabaseWriter instance for PostgreSQL export
+            use_pool: Use browser worker pool for 3-5x faster scraping
         """
         self.max_workers = max_workers
         self.timeout = timeout
@@ -409,7 +420,8 @@ class CSVProcessor:
             challenge_budget=challenge_budget,
             dead_site_budget=dead_site_budget,
             min_retry_threshold=min_retry_threshold,
-            fast_mode=fast
+            fast_mode=fast,
+            use_pool=use_pool
         )
         self.extractor = ContactExtractor()
         self.validator = EmailValidator(
@@ -1078,6 +1090,12 @@ class CSVProcessor:
 
                         # Submit tasks in batches to control memory
                         for i in range(0, len(url_data_list), batch_size):
+                            # Phase 2: Memory backpressure check
+                            if PHASE2_AVAILABLE and is_phase2_enabled():
+                                while should_throttle():
+                                    self.logger.warning("Memory pressure detected, throttling...")
+                                    time.sleep(2.0)
+                            
                             batch = url_data_list[i:i + batch_size]
 
                             future_to_url = {
@@ -1126,6 +1144,13 @@ class CSVProcessor:
                                         "queue": queue_size,
                                         "ETA": eta_str
                                     })
+                                
+                                # Phase 2: Record metrics
+                                if PHASE2_AVAILABLE and is_phase2_enabled():
+                                    record_metric('urls_processed', 1)
+                                    if result.get('status') == 'success':
+                                        record_metric('urls_success', 1)
+                                    record_metric('processing_time', result.get('processing_time', 0), 'timing')
 
                                 # Push to queue for consumer validation and writing
                                 scraped_queue.put(result)

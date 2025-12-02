@@ -18,7 +18,7 @@ Adapters Created:
 
 import asyncio
 import logging
-from typing import Dict, List, Optional, Any, Tuple, Union
+from typing import Dict, List, Optional, Any, Tuple, Union, Callable
 from dataclasses import dataclass
 
 # Import existing concrete classes
