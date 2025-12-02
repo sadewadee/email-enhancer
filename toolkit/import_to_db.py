@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-CSV/XLSX to PostgreSQL Import Script
+CSV/XLSX to PostgreSQL Import Script (Concurrent)
 
 Import data from CSV/XLSX files to zen_contacts table without re-scraping.
 Only validates phone numbers via WAHA API.
@@ -11,6 +11,7 @@ Usage:
     python toolkit/import_to_db.py result/Argentina.csv
     python toolkit/import_to_db.py result/Report.xlsx --sheet Argentina
     python toolkit/import_to_db.py file.csv --skip-waha --dry-run
+    python toolkit/import_to_db.py file.csv --workers 4  # concurrent processing
 """
 
 import argparse
@@ -19,6 +20,8 @@ import hashlib
 import logging
 import os
 import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Tuple
 
@@ -55,13 +58,15 @@ class DataImporter:
     SUMMARY_INDICATORS = ['total', 'sheet name', 'unique countries', 'summary']
     
     def __init__(self, db_writer: DatabaseWriter, waha_validator: Optional[WhatsAppValidator] = None,
-                 dry_run: bool = False, batch_size: int = 100):
+                 dry_run: bool = False, batch_size: int = 50, workers: int = 4):
         self.db = db_writer
         self.waha = waha_validator
         self.dry_run = dry_run
         self.batch_size = batch_size
+        self.workers = workers
         
-        # Stats
+        # Thread-safe stats
+        self._stats_lock = threading.Lock()
         self.stats = {
             'total_rows': 0,
             'inserted': 0,
@@ -70,6 +75,11 @@ class DataImporter:
             'waha_validated': 0,
             'errors': 0
         }
+    
+    def _update_stats(self, key: str, value: int = 1):
+        """Thread-safe stats update."""
+        with self._stats_lock:
+            self.stats[key] += value
     
     def generate_dedupe_key(self, row: Dict[str, Any]) -> str:
         """Generate deduplication key from name + street + city + country."""
@@ -202,7 +212,7 @@ class DataImporter:
             )
             if wa_result:
                 whatsapp = [wa_result]
-                self.stats['waha_validated'] += 1
+                self._update_stats('waha_validated')
                 logger.debug(f"WAHA validated: {phone_normalized} -> {wa_result}")
         
         # Generate dedupe key and source_link
@@ -311,7 +321,7 @@ class DataImporter:
     
     def process_row(self, row: Dict[str, Any], validate_whatsapp: bool = True) -> str:
         """Process single row: check existing, insert or merge."""
-        self.stats['total_rows'] += 1
+        self._update_stats('total_rows')
         
         name = str(row.get('name', '')).strip()
         street = str(row.get('street', '')).strip()
@@ -319,7 +329,7 @@ class DataImporter:
         country_code = str(row.get('country_code', '')).strip()
         
         if not name:
-            self.stats['skipped'] += 1
+            self._update_stats('skipped')
             return 'skipped'
         
         try:
@@ -332,23 +342,34 @@ class DataImporter:
             if existing:
                 # Merge into existing
                 if self.merge_row(existing, prepared):
-                    self.stats['merged'] += 1
+                    self._update_stats('merged')
                     return 'merged'
                 else:
-                    self.stats['errors'] += 1
+                    self._update_stats('errors')
                     return 'error'
             else:
                 # Insert new
                 if self.insert_row(prepared):
-                    self.stats['inserted'] += 1
+                    self._update_stats('inserted')
                     return 'inserted'
                 else:
-                    self.stats['errors'] += 1
+                    self._update_stats('errors')
                     return 'error'
         except Exception as e:
             logger.error(f"Error processing row '{name}': {e}")
-            self.stats['errors'] += 1
+            self._update_stats('errors')
             return 'error'
+    
+    def process_batch(self, rows: List[Dict[str, Any]], validate_whatsapp: bool = True) -> Dict[str, int]:
+        """Process a batch of rows (for concurrent execution)."""
+        batch_stats = {'inserted': 0, 'merged': 0, 'skipped': 0, 'errors': 0}
+        
+        for row in rows:
+            result = self.process_row(row, validate_whatsapp)
+            if result in batch_stats:
+                batch_stats[result] += 1
+        
+        return batch_stats
     
     def is_data_sheet(self, sheet_name: str, first_row: List) -> bool:
         """Check if sheet contains data (not summary)."""
@@ -432,7 +453,7 @@ class DataImporter:
     
     def import_file(self, file_path: str, sheet_name: Optional[str] = None, 
                     validate_whatsapp: bool = True) -> Dict[str, int]:
-        """Import file to database."""
+        """Import file to database with concurrent processing."""
         file_path = str(file_path)
         ext = Path(file_path).suffix.lower()
         
@@ -445,14 +466,40 @@ class DataImporter:
         
         # Process all datasets
         for source_name, rows in data_sets:
-            logger.info(f"Processing {source_name}: {len(rows)} rows")
+            total_rows = len(rows)
+            logger.info(f"Processing {source_name}: {total_rows} rows with {self.workers} workers")
             
-            iterator = rows
-            if tqdm:
-                iterator = tqdm(rows, desc=f"Importing {source_name}", unit="row")
-            
-            for row in iterator:
-                self.process_row(row, validate_whatsapp)
+            if self.workers <= 1:
+                # Sequential processing
+                iterator = rows
+                if tqdm:
+                    iterator = tqdm(rows, desc=f"Importing {source_name}", unit="row")
+                for row in iterator:
+                    self.process_row(row, validate_whatsapp)
+            else:
+                # Concurrent processing with batches
+                batches = [rows[i:i + self.batch_size] for i in range(0, total_rows, self.batch_size)]
+                
+                with ThreadPoolExecutor(max_workers=self.workers) as executor:
+                    futures = {
+                        executor.submit(self.process_batch, batch, validate_whatsapp): i 
+                        for i, batch in enumerate(batches)
+                    }
+                    
+                    if tqdm:
+                        pbar = tqdm(total=len(batches), desc=f"Importing {source_name}", unit="batch")
+                    
+                    for future in as_completed(futures):
+                        try:
+                            future.result()
+                        except Exception as e:
+                            logger.error(f"Batch error: {e}")
+                        
+                        if tqdm:
+                            pbar.update(1)
+                    
+                    if tqdm:
+                        pbar.close()
         
         return self.stats
 
@@ -466,13 +513,16 @@ Examples:
   python toolkit/import_to_db.py result/Argentina.csv
   python toolkit/import_to_db.py result/Report.xlsx --sheet Argentina
   python toolkit/import_to_db.py file.csv --skip-waha --dry-run
+  python toolkit/import_to_db.py file.csv --workers 4  # concurrent processing
+  python toolkit/import_to_db.py file.csv --workers 1  # sequential (debug)
         """
     )
     parser.add_argument('file', help='CSV or XLSX file to import')
     parser.add_argument('--sheet', help='Specific sheet name for XLSX (default: all data sheets)')
     parser.add_argument('--skip-waha', action='store_true', help='Skip WAHA WhatsApp validation')
     parser.add_argument('--dry-run', action='store_true', help='Preview without database writes')
-    parser.add_argument('--batch-size', type=int, default=100, help='Batch size for commits')
+    parser.add_argument('--workers', type=int, default=4, help='Number of concurrent workers (default: 4)')
+    parser.add_argument('--batch-size', type=int, default=50, help='Rows per batch (default: 50)')
     parser.add_argument('--verbose', '-v', action='store_true', help='Verbose logging')
     
     args = parser.parse_args()
@@ -515,7 +565,8 @@ Examples:
             db_writer=db_writer,
             waha_validator=waha_validator,
             dry_run=args.dry_run,
-            batch_size=args.batch_size
+            batch_size=args.batch_size,
+            workers=args.workers
         )
         
         # Import file
