@@ -770,8 +770,12 @@ class CSVProcessor:
                 writer_lock = threading.Lock()
                 progress_lock = threading.Lock()
 
-                # Validation workers: 150% of scraping workers for faster queue processing
-                smtp_workers = max(3, int(self.max_workers * 1.5))
+                # Validation workers: Reduce ratio to prevent CPU overload
+                # SMTP validation is slower than scraping (2-5s vs 0.5-1s per URL)
+                # but not all URLs have emails (~30%), so fewer SMTP workers are sufficient
+                # 0.8x ratio (down from 1.5x) reduces CPU by ~30-40% on VPS
+                # Examples: 3 workers → 2 SMTP, 4 workers → 3 SMTP, 6 workers → 4 SMTP
+                smtp_workers = max(1, int(self.max_workers * 0.8))
 
                 # Queue size: 2x total workers for adequate buffering
                 queue_size = (self.max_workers + smtp_workers) * 2
