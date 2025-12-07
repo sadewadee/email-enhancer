@@ -375,7 +375,7 @@ class CSVProcessor:
     Handles parallel processing of CSV files containing URLs for contact extraction.
     """
 
-    def __init__(self, max_workers: int = 5, timeout: int = 30, block_images: bool = False, disable_resources: bool = False, network_idle: bool = True, cf_wait_timeout: int = 60, skip_on_challenge: bool = False, proxy_file: str = "proxy.txt", max_concurrent_browsers: int = None, normal_budget: int = 60, challenge_budget: int = 120, dead_site_budget: int = 20, min_retry_threshold: int = 5, fast: bool = False, db_writer=None, use_pool: bool = False):
+    def __init__(self, max_workers: int = 5, timeout: int = 30, headless: bool = True, block_images: bool = False, disable_resources: bool = False, network_idle: bool = True, cf_wait_timeout: int = 60, skip_on_challenge: bool = False, proxy_file: str = "proxy.txt", max_concurrent_browsers: int = None, normal_budget: int = 60, challenge_budget: int = 120, dead_site_budget: int = 20, min_retry_threshold: int = 5, fast: bool = False, db_writer=None, use_pool: bool = False):
         """
         Initialize CSV processor.
 
@@ -399,6 +399,7 @@ class CSVProcessor:
         """
         self.max_workers = max_workers
         self.timeout = timeout
+        self.headless = headless
         self.fast_mode = fast
         self.db_writer = db_writer  # Store db_writer for consumer loop
 
@@ -407,6 +408,7 @@ class CSVProcessor:
             max_concurrent_browsers = max_workers
 
         self.scraper = WebScraper(
+            headless=headless,
             timeout=timeout,
             block_images=block_images,
             disable_resources=disable_resources,

@@ -907,7 +907,75 @@ class ContactExtractor:
                         tld = base
                         break
 
-        # If local-part starts with digit+separator blocks (likely phone glued), trim them
+        # ENHANCED: Strip location prefixes and phone numbers from local-part
+        # Patterns to handle:
+        # 1. Location prefix + phone + email: "states774.327.1287hotyogamv"
+        # 2. Location prefix + phone + email: "usa402.297.5264bhadrayogahag"
+        # 3. Location prefix + phone + email: "colorado970.987.0555breathe"
+        # 4. Just phone + email: "514.502.4891susan"
+        # 5. Details/text + phone + email: "details514-404-6181breathe"
+        
+        original_local = local
+        
+        # Step 1: Strip common location/context prefixes (states, usa, uk, colorado, etc.)
+        # These are often prepended in poorly parsed HTML
+        location_prefixes = [
+            'states', 'usa', 'colorado', 'california', 'newyork', 'texas', 'florida',
+            'canada', 'uk', 'australia', 'singapore', 'malaysia', 'indonesia',
+            'yoga', 'studio', 'location', 'details', 'address', 'contact', 'phone',
+            'tel', 'call', 'mobile', 'office', 'us', 'au', 'ca', 'sg', 'my', 'id'
+        ]
+        
+        for prefix in location_prefixes:
+            # Match prefix at start, possibly followed by digit (e.g., "states774")
+            if local.lower().startswith(prefix) and len(local) > len(prefix):
+                # Check if what follows is a digit (phone number)
+                remaining = local[len(prefix):]
+                if remaining and remaining[0].isdigit():
+                    local = remaining
+                    break
+        
+        # Step 2: Remove phone number patterns from the start of local-part
+        # Phone patterns: digits with dots/dashes/parens (e.g., "774.327.1287", "514-404-6181")
+        # We need to be careful not to remove valid email local parts
+        
+        # Pattern 1a: Vanity phone numbers with letters (e.g., "855-hpy-oga1alison" -> "alison")
+        # Match: Digits/letters with separators, ending before 3+ consecutive letters
+        vanity_match = re.match(r'^[\da-z]{1,4}[\-\.()]+[\da-z]{1,4}[\-\.()]+[\da-z]{1,4}(?=[a-z]{3,})', local, re.IGNORECASE)
+        if vanity_match:
+            vanity_part = vanity_match.group(0)
+            # Check if it has enough phone-like characteristics
+            digit_count = sum(1 for c in vanity_part if c.isdigit())
+            has_separator = any(c in vanity_part for c in '.-()')
+            # Vanity numbers: at least 3 digits and has separators
+            if digit_count >= 3 and has_separator:
+                local = local[len(vanity_part):]
+        
+        # Pattern 1b: Digits with dots (e.g., "774.327.1287hotyogamv" -> "hotyogamv")
+        # Match: one or more groups of digits followed by dot/dash/paren, ending before a letter
+        if not vanity_match:  # Only run if vanity pattern didn't match
+            phone_match = re.match(r'^[\d().\-\s]+(?=[a-z])', local, re.IGNORECASE)
+            if phone_match:
+                phone_part = phone_match.group(0)
+                # Only strip if it looks like a phone (at least 7 digits, has separators)
+                digit_count = sum(1 for c in phone_part if c.isdigit())
+                has_separator = any(c in phone_part for c in '.-()')
+                if digit_count >= 7 and has_separator:
+                    local = local[len(phone_part):]
+        
+        # Pattern 2: Simple digit blocks at start (e.g., "651330matthew" -> "matthew")
+        # Only if followed by a known alias or common name pattern
+        # CHANGED: Use 'if' instead of 'elif' so this runs even if Pattern 1 matched but didn't strip
+        if re.match(r'^\d{6,}[a-z]', local, re.IGNORECASE):
+            # Check if remainder after digits is a plausible email local part
+            digit_match = re.match(r'^(\d+)([a-z].*)$', local, re.IGNORECASE)
+            if digit_match:
+                digit_part, letter_part = digit_match.groups()
+                # Only strip if letter part is at least 3 chars (plausible email)
+                if len(letter_part) >= 3:
+                    local = letter_part
+        
+        # Pattern 3: Legacy pattern - digit+separator blocks
         # Examples: 904-1978info -> info, 651.330.8661matthew -> matthew
         if re.match(r'^\d+[._-]+', local):
             local = re.sub(r'^(?:\d+[._-]*)+', '', local)
@@ -1038,21 +1106,42 @@ class ContactExtractor:
         if any(tok in lcl for tok in suspicious_tokens):
             return False
 
-        # CRITICAL: Reject emails with embedded state codes + phone numbers (malformed parsing)
-        # Pattern: 2-letter state code at start + phone number + location name
+        # CRITICAL: Reject emails with embedded location prefixes + phone numbers (malformed parsing)
+        # Enhanced to catch more patterns beyond just 2-letter state codes
+        
+        # Pattern 1: 2-letter state code + phone number + location name
         # Examples: "ca949-509-1050losangeles", "il847-332-1018evanston"
         if re.match(r'^[a-z]{2}\d{3}-?\d{3}-?\d{4}', lcl):
-            # Matches pattern like "ca9495091050" or "ca949-509-1050" at start
             return False
 
-        # Also reject if it contains the phone number pattern anywhere (robustness)
+        # Pattern 2: Common location prefixes + digits (likely phone numbers)
+        # Examples: "states774327", "usa402297", "colorado970987", "details514404"
+        location_prefixes_pattern = (
+            r'^(?:states|usa|colorado|california|newyork|texas|florida|'
+            r'canada|australia|singapore|malaysia|indonesia|'
+            r'yoga|studio|location|details|address|contact|phone|tel|call|mobile|office|'
+            r'us|uk|au|ca|sg|my|id)\d'
+        )
+        if re.match(location_prefixes_pattern, lcl):
+            return False
+        
+        # Pattern 3: Phone number patterns with separators followed by letters
+        # Examples: "774.327.1287hotyogamv", "514-404-6181breathe"
+        # Look for 3+ digit groups with separators (dots, dashes, parens)
+        if re.search(r'\d{3}[.\-()]\d{3}[.\-()]\d{3,4}[a-z]', lcl):
+            return False
+        
+        # Pattern 4: Long digit sequences (7+) followed by letters (likely phone + email)
+        # Examples: "5145024891susan", "4166216290tracy"
+        if re.search(r'\d{7,}[a-z]{2,}', lcl):
+            return False
+
+        # Pattern 5: Also reject if it contains the phone number pattern anywhere (robustness)
         if re.search(r'\d{3}-?\d{3}-?\d{4}.*[a-z]{2,}$', lcl):
-            # Matches pattern like "1234567890cityname" anywhere in local-part
             return False
 
-        # Reject if starts with state code followed immediately by numbers
+        # Pattern 6: Reject if starts with state code followed immediately by numbers
         if re.match(r'^[a-z]{2}\d+', lcl):
-            # e.g., "ca949509..." likely state + phone concatenation
             return False
 
         # Reject excessive repetition of the same token (e.g., 'malta.malta.malta')

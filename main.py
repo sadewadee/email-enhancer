@@ -92,6 +92,7 @@ class EmailScraperValidator:
         self.csv_processor = CSVProcessor(
             max_workers=self.config['max_workers'],
             timeout=self.config['timeout'],
+            headless=self.config.get('headless', True),
             block_images=self.config.get('block_images', True),
             disable_resources=self.config.get('disable_resources', False),
             network_idle=self.config.get('network_idle', False),  # FIXED: Default to False (Phase 1A requirement)
@@ -144,6 +145,7 @@ class EmailScraperValidator:
             'block_images': True,
             'disable_resources': False,
             'network_idle': False,  # FIXED: Default to False (Phase 1A - prevent indefinite waits on sites with persistent connections)
+            'headless': True,  # Default: background mode (use --headed to show browser window)
             # Proxy configuration
             'proxy_file': 'proxy.txt'
         }
@@ -974,6 +976,8 @@ def create_config_from_args(args) -> Dict[str, Any]:
         'disable_resources': True if getattr(args, 'no_light_load', False) else False,
         # Network idle control for Cloudflare wait page/long-polling sites (Phase 1A: default False)
         'network_idle': True if getattr(args, 'network_idle', False) else False,  # FIXED: Default False, can be enabled with --network-idle flag
+        # Browser visibility control (default: headless ON, use --headed to show browser)
+        'headless': not getattr(args, 'headed', False),
         # Proxy configuration
         'proxy_file': getattr(args, 'proxy_file', 'proxy.txt'),
         # Budget configuration for time-based retry management
@@ -1052,6 +1056,8 @@ Examples:
         p.add_argument('--light-load', action='store_true', help='[Default ON] Enable light-load: block images and apply allowlist routing (keeps Cloudflare-critical JS/CSS)')
         p.add_argument('--no-light-load', action='store_true', help='Disable light-load (load all resources; no allowlist routing)')
         p.add_argument('--disable-resources', action='store_true', help='Disable non-essential resources (fonts, video, media) to save bandwidth')
+        # Browser debugging
+        p.add_argument('--headed', action='store_true', help='Show browser window for debugging (default: headless mode)')
         # Cloudflare control
         p.add_argument('--cf-wait-timeout', type=int, default=90, help='Per-URL Cloudflare wait timeout in seconds (default: 90)')
         p.add_argument('--skip-on-challenge', action='store_true', help='Skip immediately when Cloudflare challenge is detected (no retries)')
