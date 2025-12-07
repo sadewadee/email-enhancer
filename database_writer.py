@@ -432,6 +432,20 @@ class DatabaseWriter:
 
         return 0
 
+    def upsert_contact(self, row: Dict[str, Any], server_id: str = 'unknown') -> bool:
+        """
+        Upsert single contact (convenience wrapper around upsert_batch).
+        
+        Args:
+            row: Contact data dictionary
+            server_id: Server identifier for tracking
+        
+        Returns:
+            True if upsert successful, False otherwise
+        """
+        result = self.upsert_batch([row], server_id)
+        return result == 1
+
     def get_country_stats(self) -> Dict[str, int]:
         """Get row count per country."""
         conn = self.pool.getconn()
