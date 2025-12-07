@@ -3,7 +3,7 @@
 InsightHub Dashboard - Standalone Monitoring Service
 
 A FastAPI-based dashboard for monitoring the email enhancer scraping system.
-Monitors: zen_contacts, results, gmpas_job tables.
+Monitors: zen_contacts, results, gmaps_jobs tables.
 
 Usage:
     python app.py [--port 8080] [--host 0.0.0.0]
@@ -54,7 +54,7 @@ async def lifespan(app: FastAPI):
         'zen_contacts': db.table_exists('zen_contacts'),
         'results': db.table_exists('results'),
         'zen_servers': db.table_exists('zen_servers'),
-        'gmpas_job': db.table_exists('gmpas_job')
+        'gmaps_jobs': db.table_exists('gmaps_jobs')
     }
     logger.info(f"Tables status: {tables_status}")
 

@@ -48,10 +48,10 @@ async def export_csv(request: ExportRequest):
             filters=request.filters,
             limit=request.limit
         )
-        
+
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        filename = f"zenvoyer_export_{timestamp}.csv"
-        
+        filename = f"insighthub_export_{timestamp}.csv"
+
         return StreamingResponse(
             iter([csv_buffer.getvalue()]),
             media_type="text/csv",

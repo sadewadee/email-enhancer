@@ -221,7 +221,7 @@
                 const url = window.URL.createObjectURL(blob);
                 const a = document.createElement('a');
                 a.href = url;
-                a.download = `zenvoyer_export_${new Date().toISOString().slice(0,10)}.csv`;
+                a.download = `insighthub_export_${new Date().toISOString().slice(0,10)}.csv`;
                 document.body.appendChild(a);
                 a.click();
                 window.URL.revokeObjectURL(url);

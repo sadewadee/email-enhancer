@@ -4,7 +4,26 @@ const API_BASE = '';
 let refreshInterval = null;
 let currentInterval = 60000; // default 1 min
 let cache = {};
-const CACHE_TTL = 10000; // 10 seconds cache
+
+// Per-endpoint cache TTLs (milliseconds)
+const CACHE_TTLS = {
+    '/api/stats': 30000,      // 30s
+    '/api/servers': 15000,    // 15s  
+    '/api/countries': 60000,  // 60s
+    '/api/recent': 10000,     // 10s
+    '/api/hourly': 300000,    // 5 min
+    'default': 30000          // 30s default
+};
+
+// Country pagination state
+let countryState = {
+    page: 1,
+    limit: 20,
+    sortBy: 'source_total',
+    sortOrder: 'desc',
+    total: 0,
+    pages: 0
+};
 
 // Format numbers with commas
 function formatNumber(num) {
@@ -65,15 +84,19 @@ function showTableSkeleton(tableId, rows = 5) {
 async function fetchAPI(endpoint, useCache = true) {
     const cacheKey = endpoint;
     const now = Date.now();
+    
+    // Get TTL for this endpoint (strip query params for lookup)
+    const baseEndpoint = endpoint.split('?')[0];
+    const ttl = CACHE_TTLS[baseEndpoint] || CACHE_TTLS['default'];
 
     // Check cache
-    if (useCache && cache[cacheKey] && (now - cache[cacheKey].time) < CACHE_TTL) {
+    if (useCache && cache[cacheKey] && (now - cache[cacheKey].time) < ttl) {
         return cache[cacheKey].data;
     }
 
     try {
         const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 15000); // 15s timeout
+        const timeout = setTimeout(() => controller.abort(), 60000); // 60s timeout for slow remote DB
 
         const response = await fetch(API_BASE + endpoint, {
             signal: controller.signal
@@ -129,6 +152,43 @@ async function updateStats() {
     document.getElementById('last-updated').textContent = 'Updated: ' + new Date().toLocaleTimeString();
 }
 
+// Show server detail modal
+function showServerModal(server) {
+    const modal = document.getElementById('server-modal');
+    if (!modal) return;
+    
+    const formatDate = (d) => d ? new Date(d).toLocaleString() : '-';
+    
+    document.getElementById('modal-server-id').textContent = server.server_id || '-';
+    document.getElementById('modal-server-name').textContent = server.server_name || '-';
+    document.getElementById('modal-server-ip').textContent = server.server_ip || '-';
+    document.getElementById('modal-server-hostname').textContent = server.server_hostname || '-';
+    document.getElementById('modal-server-region').textContent = server.server_region || '-';
+    document.getElementById('modal-server-status').textContent = server.status || '-';
+    document.getElementById('modal-server-health').textContent = server.health || '-';
+    document.getElementById('modal-server-workers').textContent = server.workers_count || '-';
+    document.getElementById('modal-server-task').textContent = server.current_task || 'Idle';
+    document.getElementById('modal-server-processed').textContent = formatNumber(server.total_processed);
+    document.getElementById('modal-server-success').textContent = formatNumber(server.total_success);
+    document.getElementById('modal-server-failed').textContent = formatNumber(server.total_failed);
+    document.getElementById('modal-server-rate').textContent = server.urls_per_minute ? server.urls_per_minute.toFixed(2) + '/min' : '-';
+    document.getElementById('modal-server-success-rate').textContent = server.success_rate ? formatPercent(server.success_rate) : '-';
+    document.getElementById('modal-server-session-processed').textContent = formatNumber(server.session_processed);
+    document.getElementById('modal-server-session-errors').textContent = formatNumber(server.session_errors);
+    document.getElementById('modal-server-started').textContent = formatDate(server.started_at);
+    document.getElementById('modal-server-session-started').textContent = formatDate(server.session_started);
+    document.getElementById('modal-server-heartbeat').textContent = formatDate(server.last_heartbeat);
+    document.getElementById('modal-server-activity').textContent = formatDate(server.last_activity);
+    
+    modal.classList.add('show');
+}
+
+// Close modal
+function closeServerModal() {
+    const modal = document.getElementById('server-modal');
+    if (modal) modal.classList.remove('show');
+}
+
 // Update servers table
 async function updateServers() {
     const data = await fetchAPI('/api/servers');
@@ -145,9 +205,9 @@ async function updateServers() {
         return;
     }
 
-    tbody.innerHTML = servers.map(s => `
+    tbody.innerHTML = servers.map((s, i) => `
         <tr class="fade-in">
-            <td><strong>${s.server_name || s.server_id}</strong></td>
+            <td><strong class="server-link" data-server-idx="${i}">${s.server_name || s.server_id}</strong></td>
             <td>${s.server_region || '-'}</td>
             <td class="status-${s.status}">${s.status}</td>
             <td><span class="health-${s.health}">${s.health}</span></td>
@@ -157,24 +217,49 @@ async function updateServers() {
             <td>${timeAgo(s.last_activity)}</td>
         </tr>
     `).join('');
+    
+    // Store servers data for modal
+    window._serversData = servers;
+    
+    // Add click handlers
+    tbody.querySelectorAll('.server-link').forEach(el => {
+        el.addEventListener('click', () => {
+            const idx = parseInt(el.dataset.serverIdx);
+            if (window._serversData && window._serversData[idx]) {
+                showServerModal(window._serversData[idx]);
+            }
+        });
+    });
 }
 
-// Update countries table
-async function updateCountries() {
-    const data = await fetchAPI('/api/countries');
+// Update countries table with pagination and sorting
+async function updateCountries(resetPage = false) {
+    if (resetPage) countryState.page = 1;
+    
+    const params = new URLSearchParams({
+        page: countryState.page,
+        limit: countryState.limit,
+        sort_by: countryState.sortBy,
+        sort_order: countryState.sortOrder
+    });
+    
+    const data = await fetchAPI(`/api/countries?${params}`, false);
     if (!data) return;
 
     const tbody = document.getElementById('countries-body');
     const countries = data.countries || [];
+    countryState.total = data.total || 0;
+    countryState.pages = data.pages || 0;
 
-    document.getElementById('countries-count').textContent = countries.length + ' countries';
+    document.getElementById('countries-count').textContent = countryState.total + ' countries';
 
     if (countries.length === 0) {
         tbody.innerHTML = '<tr><td colspan="8" class="loading">No data yet</td></tr>';
+        renderCountryPagination();
         return;
     }
 
-    tbody.innerHTML = countries.slice(0, 50).map(c => `
+    tbody.innerHTML = countries.map(c => `
         <tr class="fade-in">
             <td><strong>${c.country_code}</strong></td>
             <td>${formatNumber(c.source_total)}</td>
@@ -191,6 +276,85 @@ async function updateCountries() {
             <td>${c.avg_scrape_time ? c.avg_scrape_time + 's' : '-'}</td>
         </tr>
     `).join('');
+    
+    renderCountryPagination();
+    updateSortIndicators();
+}
+
+// Render pagination controls for countries
+function renderCountryPagination() {
+    let paginationEl = document.getElementById('countries-pagination');
+    if (!paginationEl) {
+        const section = document.getElementById('countries-section');
+        paginationEl = document.createElement('div');
+        paginationEl.id = 'countries-pagination';
+        paginationEl.className = 'pagination';
+        section.appendChild(paginationEl);
+    }
+    
+    if (countryState.pages <= 1) {
+        paginationEl.innerHTML = '';
+        return;
+    }
+    
+    const { page, pages, total, limit } = countryState;
+    const start = (page - 1) * limit + 1;
+    const end = Math.min(page * limit, total);
+    
+    let html = `<span class="pagination-info">Showing ${start}-${end} of ${total}</span>`;
+    html += '<div class="pagination-controls">';
+    
+    html += `<button class="btn btn-sm" onclick="goToCountryPage(1)" ${page === 1 ? 'disabled' : ''}>«</button>`;
+    html += `<button class="btn btn-sm" onclick="goToCountryPage(${page - 1})" ${page === 1 ? 'disabled' : ''}>‹</button>`;
+    
+    // Page numbers
+    const maxVisible = 5;
+    let startPage = Math.max(1, page - Math.floor(maxVisible / 2));
+    let endPage = Math.min(pages, startPage + maxVisible - 1);
+    if (endPage - startPage < maxVisible - 1) {
+        startPage = Math.max(1, endPage - maxVisible + 1);
+    }
+    
+    for (let i = startPage; i <= endPage; i++) {
+        html += `<button class="btn btn-sm ${i === page ? 'btn-primary' : ''}" onclick="goToCountryPage(${i})">${i}</button>`;
+    }
+    
+    html += `<button class="btn btn-sm" onclick="goToCountryPage(${page + 1})" ${page === pages ? 'disabled' : ''}>›</button>`;
+    html += `<button class="btn btn-sm" onclick="goToCountryPage(${pages})" ${page === pages ? 'disabled' : ''}>»</button>`;
+    html += '</div>';
+    
+    paginationEl.innerHTML = html;
+}
+
+// Go to specific country page
+function goToCountryPage(page) {
+    if (page < 1 || page > countryState.pages) return;
+    countryState.page = page;
+    updateCountries();
+}
+
+// Sort countries by column
+function sortCountries(column) {
+    if (countryState.sortBy === column) {
+        countryState.sortOrder = countryState.sortOrder === 'desc' ? 'asc' : 'desc';
+    } else {
+        countryState.sortBy = column;
+        countryState.sortOrder = 'desc';
+    }
+    countryState.page = 1;
+    updateCountries();
+}
+
+// Update sort indicators in table headers
+function updateSortIndicators() {
+    const headers = document.querySelectorAll('#countries-table th[data-sort]');
+    headers.forEach(th => {
+        const col = th.dataset.sort;
+        th.classList.remove('sort-asc', 'sort-desc');
+        if (col === countryState.sortBy) {
+            th.classList.add(countryState.sortOrder === 'asc' ? 'sort-asc' : 'sort-desc');
+        }
+    });
 }
 
 // Update recent activity
@@ -221,7 +385,7 @@ async function updateActivity() {
 }
 
 // Refresh all data - parallel loading
-async function refreshData() {
+async function refreshData(resetPagination = true) {
     // Show skeleton loading
     showStatsSkeleton();
     showTableSkeleton('servers-body', 3);
@@ -232,7 +396,7 @@ async function refreshData() {
     await Promise.all([
         updateStats(),
         updateServers(),
-        updateCountries(),
+        updateCountries(resetPagination),
         updateActivity()
     ]);
 }
@@ -252,7 +416,7 @@ function changeRefreshInterval() {
     if (currentInterval > 0) {
         refreshInterval = setInterval(() => {
             cache = {}; // Clear cache before refresh
-            refreshData();
+            refreshData(false); // Don't reset pagination on auto-refresh
         }, currentInterval);
     }
 
@@ -274,7 +438,7 @@ function startAutoRefresh() {
     if (currentInterval > 0) {
         refreshInterval = setInterval(() => {
             cache = {};
-            refreshData();
+            refreshData(false); // Don't reset pagination on auto-refresh
         }, currentInterval);
     }
 }

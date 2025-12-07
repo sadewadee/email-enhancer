@@ -109,14 +109,14 @@
                 <table id="countries-table">
                     <thead>
                         <tr>
-                            <th>Country</th>
-                            <th>Source</th>
-                            <th>Enriched</th>
-                            <th>Pending</th>
-                            <th>Progress</th>
-                            <th>Emails</th>
-                            <th>WhatsApp</th>
-                            <th>Avg Time</th>
+                            <th class="sortable" data-sort="country_code" onclick="sortCountries('country_code')">Country</th>
+                            <th class="sortable" data-sort="source_total" onclick="sortCountries('source_total')">Source</th>
+                            <th class="sortable" data-sort="enriched_total" onclick="sortCountries('enriched_total')">Enriched</th>
+                            <th class="sortable" data-sort="pending" onclick="sortCountries('pending')">Pending</th>
+                            <th class="sortable" data-sort="progress_percent" onclick="sortCountries('progress_percent')">Progress</th>
+                            <th class="sortable" data-sort="emails_total" onclick="sortCountries('emails_total')">Emails</th>
+                            <th class="sortable" data-sort="whatsapp_total" onclick="sortCountries('whatsapp_total')">WhatsApp</th>
+                            <th class="sortable" data-sort="avg_scrape_time" onclick="sortCountries('avg_scrape_time')">Avg Time</th>
                         </tr>
                     </thead>
                     <tbody id="countries-body">
@@ -149,6 +149,63 @@
                 </table>
             </div>
         </section>
+    </div>
+
+    <!-- Server Detail Modal -->
+    <div id="server-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Server Details</h2>
+                <button class="modal-close" onclick="closeServerModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="modal-section">
+                    <h3>Identity</h3>
+                    <div class="modal-grid">
+                        <div class="modal-item"><span class="label">Server ID:</span> <span id="modal-server-id">-</span></div>
+                        <div class="modal-item"><span class="label">Name:</span> <span id="modal-server-name">-</span></div>
+                        <div class="modal-item"><span class="label">IP Address:</span> <span id="modal-server-ip">-</span></div>
+                        <div class="modal-item"><span class="label">Hostname:</span> <span id="modal-server-hostname">-</span></div>
+                        <div class="modal-item"><span class="label">Region:</span> <span id="modal-server-region">-</span></div>
+                    </div>
+                </div>
+                <div class="modal-section">
+                    <h3>Status</h3>
+                    <div class="modal-grid">
+                        <div class="modal-item"><span class="label">Status:</span> <span id="modal-server-status">-</span></div>
+                        <div class="modal-item"><span class="label">Health:</span> <span id="modal-server-health">-</span></div>
+                        <div class="modal-item"><span class="label">Workers:</span> <span id="modal-server-workers">-</span></div>
+                        <div class="modal-item"><span class="label">Current Task:</span> <span id="modal-server-task">-</span></div>
+                    </div>
+                </div>
+                <div class="modal-section">
+                    <h3>Statistics (All Time)</h3>
+                    <div class="modal-grid">
+                        <div class="modal-item"><span class="label">Total Processed:</span> <span id="modal-server-processed">-</span></div>
+                        <div class="modal-item"><span class="label">Success:</span> <span id="modal-server-success">-</span></div>
+                        <div class="modal-item"><span class="label">Failed:</span> <span id="modal-server-failed">-</span></div>
+                        <div class="modal-item"><span class="label">Rate:</span> <span id="modal-server-rate">-</span></div>
+                        <div class="modal-item"><span class="label">Success Rate:</span> <span id="modal-server-success-rate">-</span></div>
+                    </div>
+                </div>
+                <div class="modal-section">
+                    <h3>Current Session</h3>
+                    <div class="modal-grid">
+                        <div class="modal-item"><span class="label">Session Processed:</span> <span id="modal-server-session-processed">-</span></div>
+                        <div class="modal-item"><span class="label">Session Errors:</span> <span id="modal-server-session-errors">-</span></div>
+                        <div class="modal-item"><span class="label">Session Started:</span> <span id="modal-server-session-started">-</span></div>
+                    </div>
+                </div>
+                <div class="modal-section">
+                    <h3>Timestamps</h3>
+                    <div class="modal-grid">
+                        <div class="modal-item"><span class="label">First Started:</span> <span id="modal-server-started">-</span></div>
+                        <div class="modal-item"><span class="label">Last Heartbeat:</span> <span id="modal-server-heartbeat">-</span></div>
+                        <div class="modal-item"><span class="label">Last Activity:</span> <span id="modal-server-activity">-</span></div>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
 
     <script src="/static/js/dashboard.js"></script>
