@@ -27,12 +27,35 @@ class ContactExtractor:
         self.parser = get_best_parser()
 
         # Email regex pattern with stricter validation:
-        # - Local part must start with letter (not number)
+        # - Local part must start with letter (not number/digit sequence)
+        # - No leading digits (zip codes: 02639, 06110, etc.)
+        # - No leading phone patterns (digits with dots: 06.16.58)
         # - Domain must be valid (not file extensions)
         # - TLD must be 2+ letters (not png, jpg, etc)
+        # Use negative lookbehind to prevent matching emails with digit prefix
         self.email_pattern = re.compile(
-            r'\b[A-Za-z][A-Za-z0-9._%+-]*@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b'
+            r'(?<![0-9.])(?<![0-9]{5})\b[A-Za-z][A-Za-z0-9._%+-]{0,63}@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b'
         )
+        
+        # Blacklist domains (Sentry, test domains, etc.)
+        self._blacklist_domains = {
+            'sentry.wixpress.com', 'sentry-next.wixpress.com', 'sentry.io',
+            'o37417.ingest.sentry.io', 'example.com', 'test.com', 'demolink.com',
+            'placeholder.com', 'domain.com', 'yourdomain.com', 'mysite.com'
+        }
+        
+        # Common domain typos to auto-fix
+        self._domain_typo_fixes = {
+            '.comp': '.com',
+            '.comtel': '.com',
+            '.comnous': '.com',
+            '.comhoraires': '.com',
+            '.gmail.om': '.gmail.com',
+            '.gmail.co': '.gmail.com',
+            '.hotmail.co': '.hotmail.com',
+            '.yahoo.co': '.yahoo.com',
+            '.outlook.co': '.outlook.com'
+        }
 
         # Phone number pattern - optimized single regex combining all 6 patterns
         # Matches: +1(234)567-8900, (234) 567-8900, 234-567-8900, tel: links, etc.
@@ -1053,6 +1076,43 @@ class ContactExtractor:
             # If starts with 4+ consecutive digits, likely invalid
             if re.match(r'^\d{4,}', local):
                 return None
+
+        # PHASE 1 FIX: Domain typo correction
+        # Fix common typos before final validation
+        full_domain_lower = f"{dom_main}.{tld}".lower()
+        corrected_domain = full_domain_lower
+        for typo, fix in self._domain_typo_fixes.items():
+            if corrected_domain.endswith(typo):
+                corrected_domain = corrected_domain[:len(corrected_domain)-len(typo)] + fix
+                # Update tld after correction
+                domain_parts = corrected_domain.rsplit('.', 1)
+                if len(domain_parts) == 2:
+                    dom_main, tld = domain_parts
+                break
+        
+        # PHASE 1 FIX: Reject blacklisted domains (Sentry, test domains)
+        if corrected_domain in self._blacklist_domains:
+            return None
+        
+        # Check if host (domain without subdomain) is blacklisted
+        domain_parts = corrected_domain.split('.')
+        if len(domain_parts) >= 2:
+            # Check last 2 parts (e.g., sentry.io, wixpress.com)
+            host = '.'.join(domain_parts[-2:])
+            if any(bl_domain.endswith(host) for bl_domain in self._blacklist_domains):
+                return None
+        
+        # PHASE 1 FIX: Reject filename patterns in local-part
+        # Pattern: 2020-07-01@20.22.53 (date/time format)
+        if re.match(r'^\d{4}[-_]\d{2}[-_]\d{2}$', local):  # Date format
+            return None
+        if re.search(r'@\d{2}\.\d{2}\.\d{2}', f"{local}@{dom_main}.{tld}"):  # Time format with @
+            return None
+        
+        # PHASE 1 FIX: Reject hex string local-parts (Sentry error IDs)
+        # Pattern: 0e6a29e4756740a8a63493e912ba2174 (32 char hex)
+        if len(local) == 32 and all(c in '0123456789abcdef' for c in local):
+            return None
 
         return f"{local}@{dom_main}.{tld}"
 

@@ -31,3 +31,12 @@ google-auth>=2.30.0
 
 # XLSX import support (toolkit/import_to_db.py)
 openpyxl>=3.1.0
+
+# File system monitoring (configuration hot-reload)
+watchdog>=3.0.0
+
+# YAML configuration parsing
+pyyaml>=6.0.1
+
+# Extended typing support (Literal, Final)
+typing_extensions>=4.7.0
