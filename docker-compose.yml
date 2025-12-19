@@ -1,0 +1,73 @@
+version: '3.8'
+
+services:
+  # --------------------------------------------------------------------------
+  # PostgreSQL Database
+  # --------------------------------------------------------------------------
+  postgres:
+    image: postgres:15-alpine
+    restart: always
+    environment:
+      POSTGRES_USER: ${DB_USER:-zenvoyer_db}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-changeme}
+      POSTGRES_DB: ${DB_NAME:-zenvoyer_db}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U ${DB_USER:-zenvoyer_db}" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # --------------------------------------------------------------------------
+  # Dashboard Service (FastAPI)
+  # --------------------------------------------------------------------------
+  dashboard:
+    build: ./dashboard
+    restart: always
+    ports:
+      - "8000:8000"
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: ${DB_USER:-zenvoyer_db}
+      DB_PASSWORD: ${DB_PASSWORD:-changeme}
+      DB_NAME: ${DB_NAME:-zenvoyer_db}
+      DASHBOARD_HOST: 0.0.0.0
+      DASHBOARD_PORT: 8000
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # --------------------------------------------------------------------------
+  # Worker Service (Scraper Monitor)
+  # --------------------------------------------------------------------------
+  worker:
+    build: .
+    restart: always
+    # No ports exposed for worker
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: ${DB_USER:-zenvoyer_db}
+      DB_PASSWORD: ${DB_PASSWORD:-changeme}
+      DB_NAME: ${DB_NAME:-zenvoyer_db}
+      # Copy other env vars needed by worker
+      GOOGLE_APPLICATION_CREDENTIALS: ${GOOGLE_APPLICATION_CREDENTIALS}
+      SPREADSHEET_ID: ${SPREADSHEET_ID}
+      WAHA_BASE_URL: ${WAHA_BASE_URL}
+      WAHA_API_KEY: ${WAHA_API_KEY}
+    volumes:
+      # Persist data directories
+      - ./data:/app/data
+      - ./new_data:/app/new_data
+      - ./results:/app/results
+      - ./logs:/app/logs
+      # Mount country directory to provide input files
+      - ./country:/app/country
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
