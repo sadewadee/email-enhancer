@@ -1,9 +1,24 @@
 version: '3.8'
 
+# =============================================================================
+# Email Enhancer - Docker Compose for Dokploy
+# =============================================================================
+# Deploy to Dokploy:
+#   1. Push repo to Git (GitHub/GitLab)
+#   2. Create new project in Dokploy
+#   3. Set environment variables in Dokploy dashboard
+#   4. Deploy!
+#
+# Required env vars: DB_USER, DB_PASSWORD, DB_NAME
+# Optional env vars: WAHA_BASE_URL, WAHA_API_KEY, SPREADSHEET_ID
+# =============================================================================
+
 services:
   # --------------------------------------------------------------------------
   # PostgreSQL Database
   # --------------------------------------------------------------------------
+  # TIP: For Dokploy shared DB, you can REMOVE this service and
+  # point DB_HOST to your shared database instance.
   postgres:
     image: postgres:15-alpine
     restart: always
@@ -18,6 +33,10 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 512M
 
   # --------------------------------------------------------------------------
   # Dashboard Service (FastAPI)
@@ -38,6 +57,10 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 512M
 
   # --------------------------------------------------------------------------
   # Worker Service (Scraper Monitor)
@@ -52,22 +75,40 @@ services:
       DB_USER: ${DB_USER:-zenvoyer_db}
       DB_PASSWORD: ${DB_PASSWORD:-changeme}
       DB_NAME: ${DB_NAME:-zenvoyer_db}
-      # Copy other env vars needed by worker
-      GOOGLE_APPLICATION_CREDENTIALS: ${GOOGLE_APPLICATION_CREDENTIALS}
-      SPREADSHEET_ID: ${SPREADSHEET_ID}
-      WAHA_BASE_URL: ${WAHA_BASE_URL}
-      WAHA_API_KEY: ${WAHA_API_KEY}
+      # Optional: WAHA WhatsApp validation (leave empty to disable)
+      WAHA_BASE_URL: ${WAHA_BASE_URL:-}
+      WAHA_API_KEY: ${WAHA_API_KEY:-}
+      # Optional: Google Sheets sync (leave empty to disable)
+      # Note: For Google Sheets, mount credentials file or use base64 secret
+      SPREADSHEET_ID: ${SPREADSHEET_ID:-}
+      GOOGLE_APPLICATION_CREDENTIALS: ${GOOGLE_APPLICATION_CREDENTIALS:-}
     volumes:
-      # Persist data directories
-      - ./data:/app/data
-      - ./new_data:/app/new_data
-      - ./results:/app/results
-      - ./logs:/app/logs
-      # Mount country directory to provide input files
-      - ./country:/app/country
+      # Persist data directories (Dokploy will create these as named volumes)
+      - worker_data:/app/data
+      - worker_new_data:/app/new_data
+      - worker_results:/app/results
+      - worker_logs:/app/logs
+      - worker_country:/app/country
     depends_on:
       postgres:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os; exit(0 if os.path.exists('/app/monitor.py') else 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 1G
 
 volumes:
   postgres_data:
+  worker_data:
+  worker_new_data:
+  worker_results:
+  worker_logs:
+  worker_country:
